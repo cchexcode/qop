@@ -15,7 +15,7 @@ readme = "docs/README.md"
 default = []
 
 [dependencies]
-tokio = { version = "1.43.0", features = [
+tokio = { version = "1.46.1", features = [
     "rt",
     "rt-multi-thread",
     "macros",
