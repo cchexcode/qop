@@ -234,6 +234,101 @@ async fn main() -> Result<()> {
                     },
                 }
             },
+            | crate::args::Migration::Fix { path } => {
+                let (config, pool) = get_db_assets(&path, None).await?;
+                let p = PathBuf::from(&path);
+                let migration_dir = p.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", p.display()))?;
+                let local_migrations = get_local_migrations(&p)?;
+
+                match config.backend {
+                    | Backend::Postgres { schema, table, .. } => {
+                        let mut tx = pool.begin().await?;
+
+                        let applied_migrations: HashSet<String> =
+                            sqlx::query(&format!("SELECT id FROM {}.{} ORDER BY id ASC", schema, table))
+                                .fetch_all(&mut *tx)
+                                .await?
+                                .into_iter()
+                                .map(|row| row.get("id"))
+                                .collect();
+
+                        let max_applied_migration = applied_migrations.iter().max().cloned().unwrap_or_default();
+
+                        let out_of_order_migrations: Vec<String> = local_migrations
+                            .difference(&applied_migrations)
+                            .filter(|id| id.as_str() < max_applied_migration.as_str())
+                            .cloned()
+                            .collect();
+
+                        if out_of_order_migrations.is_empty() {
+                            println!("No out-of-order migrations to fix.");
+                        } else {
+                            let max_applied_ts = applied_migrations
+                                .iter()
+                                .filter_map(|id| id.strip_prefix("id=").and_then(|s| s.parse::<i64>().ok()))
+                                .max()
+                                .unwrap_or(0);
+
+                            let mut next_ts = std::cmp::max(max_applied_ts, Utc::now().timestamp_millis());
+
+                            for old_id in out_of_order_migrations {
+                                next_ts += 1;
+                                let new_id = format!("id={}", next_ts);
+                                let old_path = migration_dir.join(&old_id);
+                                let new_path = migration_dir.join(&new_id);
+
+                                std::fs::rename(&old_path, &new_path)?;
+
+                                println!("Shuffled migration {} to {}", old_id, new_id);
+                            }
+                        }
+
+                        tx.commit().await?;
+
+                        Ok(())
+                    },
+                }
+            },
+            | crate::args::Migration::Sync { path } => {
+                let (config, pool) = get_db_assets(&path, None).await?;
+                let p = PathBuf::from(&path);
+                let migration_dir = p.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", p.display()))?;
+                match config.backend {
+                    | Backend::Postgres { schema, table, .. } => {
+                        let mut tx = pool.begin().await?;
+
+                        let all_migrations: Vec<PgRow> =
+                            sqlx::query(&format!("SELECT id, up, down FROM {}.{} ORDER BY id ASC", schema, table))
+                                .fetch_all(&mut *tx)
+                                .await?;
+
+                        if all_migrations.is_empty() {
+                            println!("No migrations to sync.");
+                        } else {
+                            for row in all_migrations {
+                                let id: String = row.get("id");
+                                let up_sql: String = row.get("up");
+                                let down_sql: String = row.get("down");
+
+                                let migration_id_path = migration_dir.join(&id);
+                                std::fs::create_dir_all(&migration_id_path)?;
+
+                                let up_path = migration_id_path.join("up.sql");
+                                let down_path = migration_id_path.join("down.sql");
+
+                                std::fs::write(up_path, up_sql)?;
+                                std::fs::write(down_path, down_sql)?;
+
+                                println!("Synced migration: {}", id);
+                            }
+                        }
+
+                        tx.commit().await?;
+
+                        Ok(())
+                    },
+                }
+            },
             | crate::args::Migration::List { path } => {
                 let (config, pool) = get_db_assets(&path, None).await?;
                 let p = PathBuf::from(&path);

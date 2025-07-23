@@ -57,6 +57,12 @@ pub(crate) enum Migration {
     List {
         path: String,
     },
+    Sync {
+        path: String,
+    },
+    Fix {
+        path: String,
+    },
 }
 
 #[derive(Debug)]
@@ -93,7 +99,7 @@ impl ClapArgumentLoader {
             .subcommand(
                 clap::Command::new("init")
                     .about("Initializes a new project.")
-                    .arg(clap::Arg::new("path").short('p').long("path").required(true)),
+                    .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml")),
             )
             .subcommand(
                 clap::Command::new("man")
@@ -125,24 +131,24 @@ impl ClapArgumentLoader {
                     .subcommand(
                         clap::Command::new("init")
                             .about("Initializes the database.")
-                            .arg(clap::Arg::new("path").short('p').long("path").required(true)),
+                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml")),
                     )
                     .subcommand(
                         clap::Command::new("new")
                             .about("Creates a new migration.")
-                            .arg(clap::Arg::new("path").short('p').long("path").required(true)),
+                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml")),
                     )
                     .subcommand(
                         clap::Command::new("up")
                             .about("Runs the migrations.")
-                            .arg(clap::Arg::new("path").short('p').long("path").required(true))
+                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml"))
                             .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
                             .arg(clap::Arg::new("count").short('c').long("count").required(false)),
                     )
                     .subcommand(
                         clap::Command::new("down")
                             .about("Rolls back the migrations.")
-                            .arg(clap::Arg::new("path").short('p').long("path").required(true))
+                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml"))
                             .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
                             .arg(clap::Arg::new("remote").short('r').long("remote").required(false).num_args(0))
                             .arg(clap::Arg::new("count").short('c').long("count").required(false)),
@@ -150,7 +156,17 @@ impl ClapArgumentLoader {
                     .subcommand(
                         clap::Command::new("list")
                             .about("Lists all applied migrations.")
-                            .arg(clap::Arg::new("path").short('p').long("path").required(true)),
+                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml")),
+                    )
+                    .subcommand(
+                        clap::Command::new("sync")
+                            .about("Upserts all remote migrations locally.")
+                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml")),
+                    )
+                    .subcommand(
+                        clap::Command::new("fix")
+                            .about("Shuffles all non-run local migrations to the end of the chain.")
+                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml")),
                     ),
             )
     }
@@ -207,6 +223,14 @@ impl ClapArgumentLoader {
                 })
             } else if let Some(subc) = subc.subcommand_matches("list") {
                 Command::Migration(Migration::List {
+                    path: subc.get_one::<String>("path").unwrap().into(),
+                })
+            } else if let Some(subc) = subc.subcommand_matches("sync") {
+                Command::Migration(Migration::Sync {
+                    path: subc.get_one::<String>("path").unwrap().into(),
+                })
+            } else if let Some(subc) = subc.subcommand_matches("fix") {
+                Command::Migration(Migration::Fix {
                     path: subc.get_one::<String>("path").unwrap().into(),
                 })
             } else {
