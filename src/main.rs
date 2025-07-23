@@ -140,6 +140,12 @@ async fn main() -> Result<()> {
                         if migrations_to_apply.is_empty() {
                             println!("All migrations are up to date.");
                         } else {
+                            let mut last_migration_id: Option<String> =
+                                sqlx::query(&format!("SELECT id FROM {}.{} ORDER BY id DESC LIMIT 1", schema, table))
+                                    .fetch_optional(&mut *tx)
+                                    .await?
+                                    .map(|row| row.get("id"));
+
                             for migration_id in &migrations_to_apply {
                                 let migration_path = migration_dir.join(migration_id);
                                 println!("Applying migration: {}", migration_path.display());
@@ -154,15 +160,17 @@ async fn main() -> Result<()> {
                                 sqlx::query(&up_sql).execute(&mut *tx).await?;
 
                                 sqlx::query(&format!(
-                                    "INSERT INTO {}.{} (id, version, up, down) VALUES ($1, $2, $3, $4)",
+                                    "INSERT INTO {}.{} (id, version, up, down, pre) VALUES ($1, $2, $3, $4, $5)",
                                     schema, table
                                 ))
                                 .bind(id)
                                 .bind(env!("CARGO_PKG_VERSION"))
                                 .bind(up_sql)
                                 .bind(down_sql)
+                                .bind(last_migration_id.as_deref())
                                 .execute(&mut *tx)
                                 .await?;
+                                last_migration_id = Some(id.to_string());
                             }
 
                             println!("Applied {} migrations.", migrations_to_apply.len());
