@@ -69,6 +69,25 @@ async fn main() -> Result<()> {
             reference::build_shell_completion(&out_path, &shell)?;
             Ok(())
         },
+        | crate::args::Command::Init { path } => {
+            let p = PathBuf::from(path);
+            let parent = p.parent().ok_or_else(|| anyhow::anyhow!("invalid path"))?;
+            std::fs::create_dir_all(parent)?;
+            let config = Config {
+                backend: Backend::Postgres {
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    username: "postgres".to_string(),
+                    password: "postgres".to_string(),
+                    database: "postgres".to_string(),
+                    schema: "public".to_string(),
+                    table: "__qop".to_string(),
+                },
+            };
+            let toml = toml::to_string(&config)?;
+            std::fs::write(p, toml)?;
+            Ok(())
+        },
         | crate::args::Command::Migration(migration) => match migration {
             | crate::args::Migration::Init { path } => {
                 let (config, pool) = get_db_assets(&path, None).await?;

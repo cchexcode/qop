@@ -69,6 +69,9 @@ pub(crate) enum Command {
         shell: clap_complete::Shell,
     },
     Migration(Migration),
+    Init {
+        path: String,
+    },
 }
 
 pub(crate) struct ClapArgumentLoader {}
@@ -86,6 +89,11 @@ impl ClapArgumentLoader {
                 .long("experimental")
                 .help("Enables experimental features.")
                 .num_args(0)])
+            .subcommand(
+                clap::Command::new("init")
+                    .about("Initializes a new project.")
+                    .arg(clap::Arg::new("path").short('p').long("path").required(true)),
+            )
             .subcommand(
                 clap::Command::new("man")
                     .about("Renders the manual.")
@@ -115,7 +123,7 @@ impl ClapArgumentLoader {
                     .about("Manages migrations.")
                     .subcommand(
                         clap::Command::new("init")
-                            .about("Initializes a new project.")
+                            .about("Initializes the database.")
                             .arg(clap::Arg::new("path").short('p').long("path").required(true)),
                     )
                     .subcommand(
@@ -167,6 +175,10 @@ impl ClapArgumentLoader {
             Command::Autocomplete {
                 path: subc.get_one::<String>("out").unwrap().into(),
                 shell: clap_complete::Shell::from_str(subc.get_one::<String>("shell").unwrap().as_str()).unwrap(),
+            }
+        } else if let Some(subc) = command.subcommand_matches("init") {
+            Command::Init {
+                path: subc.get_one::<String>("path").unwrap().into(),
             }
         } else if let Some(subc) = command.subcommand_matches("migration") {
             if let Some(subc) = subc.subcommand_matches("init") {
