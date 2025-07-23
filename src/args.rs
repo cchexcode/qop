@@ -46,10 +46,15 @@ pub(crate) enum Migration {
     Up {
         path: String,
         timeout: Option<u64>,
+        count: Option<usize>,
     },
     Down {
         path: String,
         timeout: Option<u64>,
+        count: Option<usize>,
+    },
+    List {
+        path: String,
     },
 }
 
@@ -122,14 +127,21 @@ impl ClapArgumentLoader {
                         clap::Command::new("up")
                             .about("Runs the migrations.")
                             .arg(clap::Arg::new("path").short('p').long("path").required(true))
-                            .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false)),
+                            .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
+                            .arg(clap::Arg::new("count").short('c').long("count").required(false)),
                     )
                     .subcommand(
                         clap::Command::new("down")
                             .about("Rolls back the migrations.")
                             .arg(clap::Arg::new("path").short('p').long("path").required(true))
-                            .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false)),
+                            .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
+                            .arg(clap::Arg::new("count").short('c').long("count").required(false)),
                     )
+                    .subcommand(
+                        clap::Command::new("list")
+                            .about("Lists all applied migrations.")
+                            .arg(clap::Arg::new("path").short('p').long("path").required(true)),
+                    ),
             )
     }
 
@@ -170,11 +182,17 @@ impl ClapArgumentLoader {
                 Command::Migration(Migration::Up {
                     path: subc.get_one::<String>("path").unwrap().into(),
                     timeout: subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
+                    count: subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
                 })
             } else if let Some(subc) = subc.subcommand_matches("down") {
                 Command::Migration(Migration::Down {
                     path: subc.get_one::<String>("path").unwrap().into(),
                     timeout: subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
+                    count: subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
+                })
+            } else if let Some(subc) = subc.subcommand_matches("list") {
+                Command::Migration(Migration::List {
+                    path: subc.get_one::<String>("path").unwrap().into(),
                 })
             } else {
                 return Err(anyhow::anyhow!("unknown command"));
