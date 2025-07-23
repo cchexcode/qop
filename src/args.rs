@@ -52,6 +52,7 @@ pub(crate) enum Migration {
         path: String,
         timeout: Option<u64>,
         count: Option<usize>,
+        remote: bool,
     },
     List {
         path: String,
@@ -143,6 +144,7 @@ impl ClapArgumentLoader {
                             .about("Rolls back the migrations.")
                             .arg(clap::Arg::new("path").short('p').long("path").required(true))
                             .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
+                            .arg(clap::Arg::new("remote").short('r').long("remote").required(false).num_args(0))
                             .arg(clap::Arg::new("count").short('c').long("count").required(false)),
                     )
                     .subcommand(
@@ -201,6 +203,7 @@ impl ClapArgumentLoader {
                     path: subc.get_one::<String>("path").unwrap().into(),
                     timeout: subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
                     count: subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
+                    remote: subc.get_flag("remote"),
                 })
             } else if let Some(subc) = subc.subcommand_matches("list") {
                 Command::Migration(Migration::List {

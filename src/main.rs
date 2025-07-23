@@ -182,8 +182,10 @@ async fn main() -> Result<()> {
                     },
                 }
             },
-            | crate::args::Migration::Down { path, timeout, count } => {
+            | crate::args::Migration::Down { path, timeout, count, remote } => {
                 let (config, pool) = get_db_assets(&path, timeout).await?;
+                let p = PathBuf::from(&path);
+                let migration_dir = p.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", p.display()))?;
                 match config.backend {
                     | Backend::Postgres { schema, table, .. } => {
                         let mut tx = pool.begin().await?;
@@ -206,7 +208,12 @@ async fn main() -> Result<()> {
                         } else {
                             for row in migrations_to_revert {
                                 let id: String = row.get("id");
-                                let down_sql: String = row.get("down");
+                                let down_sql: String = if remote {
+                                    row.get("down")
+                                } else {
+                                    let down_sql_path = migration_dir.join(&id).join("down.sql");
+                                    std::fs::read_to_string(down_sql_path)?
+                                };
                                 println!("Reverting migration: {}", id);
                                 sqlx::query(&down_sql).execute(&mut *tx).await?;
                                 sqlx::query(&format!("DELETE FROM {}.{} WHERE id = $1", schema, table))
