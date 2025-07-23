@@ -25,7 +25,7 @@ fn collect_commands() -> Vec<(String, clap::Command)> {
 
 pub fn build_shell_completion(outdir: &Path, shell: &Shell) -> Result<()> {
     let mut app = ClapArgumentLoader::root_command();
-    clap_complete::generate_to(*shell, &mut app, "neomake", &outdir)?;
+    clap_complete::generate_to(*shell, &mut app, "qop", &outdir)?;
 
     Ok(())
 }
