@@ -4,7 +4,7 @@ pub mod config;
 
 use {
     crate::config::{Backend, Config},
-    anyhow::Result,
+    anyhow::{Context, Result},
     args::ManualFormat,
     chrono::{NaiveDateTime, Utc},
     comfy_table::{
@@ -13,12 +13,15 @@ use {
     sqlx::{postgres::PgRow, Pool, Postgres, Row},
     std::{
         collections::{BTreeMap, HashMap, HashSet},
-        path::{Path, PathBuf},
+        path::Path,
     },
 };
 
-async fn get_db_assets(path: &str, timeout: Option<u64>) -> Result<(Config, Pool<Postgres>)> {
-    let config: Config = toml::from_str(&std::fs::read_to_string(path)?)?;
+async fn get_db_assets(path: &Path, timeout: Option<u64>) -> Result<(Config, Pool<Postgres>)> {
+    let config_content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read config file at: {}", path.display()))?;
+    let config: Config = toml::from_str(&config_content)
+        .with_context(|| format!("Failed to parse config file at: {}", path.display()))?;
     let pool = match &config.backend {
         | Backend::Postgres { host, port, username, password, database, .. } => {
             let mut uri = format!("postgres://");
@@ -36,11 +39,16 @@ async fn get_db_assets(path: &str, timeout: Option<u64>) -> Result<(Config, Pool
 }
 
 fn get_local_migrations(path: &Path) -> Result<HashSet<String>> {
-    let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
-    Ok(std::fs::read_dir(migration_dir)?
+    let migration_dir = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
+    Ok(std::fs::read_dir(migration_dir)
+        .with_context(|| format!("Failed to read migration directory: {}", migration_dir.display()))?
         .filter_map(|entry| {
             let entry = entry.ok()?;
-            if entry.file_type().ok()?.is_dir() && entry.file_name().to_string_lossy().starts_with("id=") {
+            if entry.file_type().ok()?.is_dir()
+                && entry.file_name().to_string_lossy().starts_with("id=")
+            {
                 Some(entry.file_name().to_string_lossy().into_owned())
             } else {
                 None
@@ -55,28 +63,30 @@ async fn main() -> Result<()> {
 
     match cmd.command {
         | crate::args::Command::Manual { path, format } => {
-            let out_path = PathBuf::from(path);
-            std::fs::create_dir_all(&out_path)?;
+            std::fs::create_dir_all(&path)
+                .with_context(|| format!("Failed to create directory: {}", path.display()))?;
             match format {
                 | ManualFormat::Manpages => {
-                    reference::build_manpages(&out_path)?;
+                    reference::build_manpages(&path)?;
                 },
                 | ManualFormat::Markdown => {
-                    reference::build_markdown(&out_path)?;
+                    reference::build_markdown(&path)?;
                 },
             }
             Ok(())
         },
         | crate::args::Command::Autocomplete { path, shell } => {
-            let out_path = PathBuf::from(path);
-            std::fs::create_dir_all(&out_path)?;
-            reference::build_shell_completion(&out_path, &shell)?;
+            std::fs::create_dir_all(&path)
+                .with_context(|| format!("Failed to create directory: {}", path.display()))?;
+            reference::build_shell_completion(&path, &shell)?;
             Ok(())
         },
         | crate::args::Command::Init { path } => {
-            let p = PathBuf::from(path);
-            let parent = p.parent().ok_or_else(|| anyhow::anyhow!("invalid path"))?;
-            std::fs::create_dir_all(parent)?;
+            let parent = path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("invalid path"))?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
             let config = Config {
                 backend: Backend::Postgres {
                     host: "localhost".to_string(),
@@ -89,12 +99,15 @@ async fn main() -> Result<()> {
                 },
             };
             let toml = toml::to_string(&config)?;
-            std::fs::write(p, toml)?;
+            std::fs::write(&path, toml)
+                .with_context(|| format!("Failed to write config file to: {}", path.display()))?;
             Ok(())
         },
-        | crate::args::Command::Migration(migration) => match migration {
-            | crate::args::Migration::Init { path } => {
-                let (config, pool) = get_db_assets(&path, None).await?;
+        | crate::args::Command::Migration(migration) => {
+            let path = &migration.path;
+            match migration.command {
+            | crate::args::MigrationSubcommand::Init => {
+                let (config, pool) = get_db_assets(path, None).await?;
                 match config.backend {
                     | Backend::Postgres { schema, table, .. } => {
                         let mut tx = pool.begin().await?;
@@ -112,11 +125,10 @@ async fn main() -> Result<()> {
                     },
                 }
             },
-            | crate::args::Migration::Up { path, timeout, count } => {
-                let (config, pool) = get_db_assets(&path, timeout).await?;
-                let p = PathBuf::from(&path);
-                let migration_dir = p.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", p.display()))?;
-                let local_migrations = get_local_migrations(&p)?;
+            | crate::args::MigrationSubcommand::Up { timeout, count } => {
+                let (config, pool) = get_db_assets(path, timeout).await?;
+                let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
+                let local_migrations = get_local_migrations(path)?;
 
                 match config.backend {
                     | Backend::Postgres { schema, table, .. } => {
@@ -129,6 +141,12 @@ async fn main() -> Result<()> {
                                 .into_iter()
                                 .map(|row| row.get("id"))
                                 .collect();
+
+                        let mut last_migration_id: Option<String> =
+                            sqlx::query(&format!("SELECT id FROM {}.{} ORDER BY id DESC LIMIT 1", schema, table))
+                                .fetch_optional(&mut *tx)
+                                .await?
+                                .map(|row| row.get("id"));
 
                         let mut migrations_to_apply: Vec<String> =
                             local_migrations.difference(&applied_migrations).cloned().collect();
@@ -144,12 +162,6 @@ async fn main() -> Result<()> {
                         if migrations_to_apply.is_empty() {
                             println!("All migrations are up to date.");
                         } else {
-                            let mut last_migration_id: Option<String> =
-                                sqlx::query(&format!("SELECT id FROM {}.{} ORDER BY id DESC LIMIT 1", schema, table))
-                                    .fetch_optional(&mut *tx)
-                                    .await?
-                                    .map(|row| row.get("id"));
-
                             for migration_id in &migrations_to_apply {
                                 let migration_path = migration_dir.join(migration_id);
                                 println!("Applying migration: {}", migration_path.display());
@@ -158,8 +170,17 @@ async fn main() -> Result<()> {
                                 let up_sql_path = migration_path.join("up.sql");
                                 let down_sql_path = migration_path.join("down.sql");
 
-                                let up_sql = std::fs::read_to_string(up_sql_path)?;
-                                let down_sql = std::fs::read_to_string(down_sql_path)?;
+                                let up_sql = std::fs::read_to_string(&up_sql_path).with_context(
+                                    || format!("Failed to read up migration: {}", up_sql_path.display()),
+                                )?;
+                                let down_sql = std::fs::read_to_string(&down_sql_path).with_context(
+                                    || {
+                                        format!(
+                                            "Failed to read down migration: {}",
+                                            down_sql_path.display()
+                                        )
+                                    },
+                                )?;
 
                                 sqlx::query(&up_sql).execute(&mut *tx).await?;
 
@@ -186,10 +207,9 @@ async fn main() -> Result<()> {
                     },
                 }
             },
-            | crate::args::Migration::Down { path, timeout, count, remote } => {
-                let (config, pool) = get_db_assets(&path, timeout).await?;
-                let p = PathBuf::from(&path);
-                let migration_dir = p.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", p.display()))?;
+            | crate::args::MigrationSubcommand::Down { timeout, count, remote } => {
+                let (config, pool) = get_db_assets(path, timeout).await?;
+                let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
                 match config.backend {
                     | Backend::Postgres { schema, table, .. } => {
                         let mut tx = pool.begin().await?;
@@ -216,7 +236,12 @@ async fn main() -> Result<()> {
                                     row.get("down")
                                 } else {
                                     let down_sql_path = migration_dir.join(&id).join("down.sql");
-                                    std::fs::read_to_string(down_sql_path)?
+                                    std::fs::read_to_string(&down_sql_path).with_context(|| {
+                                        format!(
+                                            "Failed to read down migration: {}",
+                                            down_sql_path.display()
+                                        )
+                                    })?
                                 };
                                 println!("Reverting migration: {}", id);
                                 sqlx::query(&down_sql).execute(&mut *tx).await?;
@@ -234,11 +259,10 @@ async fn main() -> Result<()> {
                     },
                 }
             },
-            | crate::args::Migration::Fix { path } => {
-                let (config, pool) = get_db_assets(&path, None).await?;
-                let p = PathBuf::from(&path);
-                let migration_dir = p.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", p.display()))?;
-                let local_migrations = get_local_migrations(&p)?;
+            | crate::args::MigrationSubcommand::Fix { .. } => {
+                let (config, pool) = get_db_assets(path, None).await?;
+                let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
+                let local_migrations = get_local_migrations(path)?;
 
                 match config.backend {
                     | Backend::Postgres { schema, table, .. } => {
@@ -254,6 +278,14 @@ async fn main() -> Result<()> {
 
                         let max_applied_migration = applied_migrations.iter().max().cloned().unwrap_or_default();
 
+                        let max_applied_ts = applied_migrations
+                            .iter()
+                            .filter_map(|id| id.strip_prefix("id=").and_then(|s| s.parse::<i64>().ok()))
+                            .max()
+                            .unwrap_or(0);
+
+                        let mut next_ts = std::cmp::max(max_applied_ts, Utc::now().timestamp_millis());
+
                         let out_of_order_migrations: Vec<String> = local_migrations
                             .difference(&applied_migrations)
                             .filter(|id| id.as_str() < max_applied_migration.as_str())
@@ -263,21 +295,19 @@ async fn main() -> Result<()> {
                         if out_of_order_migrations.is_empty() {
                             println!("No out-of-order migrations to fix.");
                         } else {
-                            let max_applied_ts = applied_migrations
-                                .iter()
-                                .filter_map(|id| id.strip_prefix("id=").and_then(|s| s.parse::<i64>().ok()))
-                                .max()
-                                .unwrap_or(0);
-
-                            let mut next_ts = std::cmp::max(max_applied_ts, Utc::now().timestamp_millis());
-
                             for old_id in out_of_order_migrations {
                                 next_ts += 1;
                                 let new_id = format!("id={}", next_ts);
                                 let old_path = migration_dir.join(&old_id);
                                 let new_path = migration_dir.join(&new_id);
 
-                                std::fs::rename(&old_path, &new_path)?;
+                                std::fs::rename(&old_path, &new_path).with_context(|| {
+                                    format!(
+                                        "Failed to shuffle migration from {} to {}",
+                                        old_path.display(),
+                                        new_path.display()
+                                    )
+                                })?;
 
                                 println!("Shuffled migration {} to {}", old_id, new_id);
                             }
@@ -289,10 +319,9 @@ async fn main() -> Result<()> {
                     },
                 }
             },
-            | crate::args::Migration::Sync { path } => {
-                let (config, pool) = get_db_assets(&path, None).await?;
-                let p = PathBuf::from(&path);
-                let migration_dir = p.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", p.display()))?;
+            | crate::args::MigrationSubcommand::Sync { .. } => {
+                let (config, pool) = get_db_assets(path, None).await?;
+                let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
                 match config.backend {
                     | Backend::Postgres { schema, table, .. } => {
                         let mut tx = pool.begin().await?;
@@ -311,13 +340,24 @@ async fn main() -> Result<()> {
                                 let down_sql: String = row.get("down");
 
                                 let migration_id_path = migration_dir.join(&id);
-                                std::fs::create_dir_all(&migration_id_path)?;
+                                std::fs::create_dir_all(&migration_id_path).with_context(
+                                    || {
+                                        format!(
+                                            "Failed to create directory: {}",
+                                            migration_id_path.display()
+                                        )
+                                    },
+                                )?;
 
                                 let up_path = migration_id_path.join("up.sql");
                                 let down_path = migration_id_path.join("down.sql");
 
-                                std::fs::write(up_path, up_sql)?;
-                                std::fs::write(down_path, down_sql)?;
+                                std::fs::write(&up_path, up_sql).with_context(|| {
+                                    format!("Failed to write up migration: {}", up_path.display())
+                                })?;
+                                std::fs::write(&down_path, down_sql).with_context(|| {
+                                    format!("Failed to write down migration: {}", down_path.display())
+                                })?;
 
                                 println!("Synced migration: {}", id);
                             }
@@ -329,10 +369,9 @@ async fn main() -> Result<()> {
                     },
                 }
             },
-            | crate::args::Migration::List { path } => {
-                let (config, pool) = get_db_assets(&path, None).await?;
-                let p = PathBuf::from(&path);
-                let local_migrations = get_local_migrations(&p)?;
+            | crate::args::MigrationSubcommand::List { .. } => {
+                let (config, pool) = get_db_assets(path, None).await?;
+                let local_migrations = get_local_migrations(path)?;
 
                 match config.backend {
                     | Backend::Postgres { schema, table, .. } => {
@@ -396,23 +435,33 @@ async fn main() -> Result<()> {
                     },
                 }
             },
-            | crate::args::Migration::New { path } => {
-                let config: Config = toml::from_str(&std::fs::read_to_string(&path)?)?;
+            | crate::args::MigrationSubcommand::New { .. } => {
+                let config: Config = toml::from_str(
+                    &std::fs::read_to_string(path)
+                        .with_context(|| format!("Failed to read config file at: {}", path.display()))?,
+                )
+                .with_context(|| format!("Failed to parse config file at: {}", path.display()))?;
                 match config.backend {
                     | Backend::Postgres { .. } => {
                         let id = Utc::now().timestamp_millis().to_string();
-                        let p = PathBuf::from(path);
-                        let migration_path = p.parent().unwrap();
+                        let migration_path = path.parent().unwrap();
                         let migration_id_path = migration_path.join(format!("id={}", id));
-                        std::fs::create_dir_all(&migration_id_path)?;
+                        std::fs::create_dir_all(&migration_id_path).with_context(|| {
+                            format!("Failed to create directory: {}", migration_id_path.display())
+                        })?;
                         let up_path = migration_id_path.join("up.sql");
                         let down_path = migration_id_path.join("down.sql");
-                        std::fs::write(up_path, "-- SQL goes here")?;
-                        std::fs::write(down_path, "-- SQL goes here")?;
+                        std::fs::write(&up_path, "-- SQL goes here").with_context(|| {
+                            format!("Failed to write up migration: {}", up_path.display())
+                        })?;
+                        std::fs::write(&down_path, "-- SQL goes here").with_context(|| {
+                            format!("Failed to write down migration: {}", down_path.display())
+                        })?;
                         Ok(())
                     },
                 }
-            },
+            }
+        }
         },
     }
 }

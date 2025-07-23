@@ -1,6 +1,8 @@
 use {
-    anyhow::Result, clap::Arg, std::
-        str::FromStr
+    anyhow::Result,
+    clap::Arg,
+    path_clean::PathClean,
+    std::{path::PathBuf, str::FromStr},
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -36,54 +38,57 @@ impl CallArgs {
 }
 
 #[derive(Debug)]
-pub(crate) enum Migration {
-    Init {
-        path: String,
-    },
-    New {
-        path: String,
-    },
+pub(crate) enum MigrationSubcommand {
+    Init,
+    New,
     Up {
-        path: String,
         timeout: Option<u64>,
         count: Option<usize>,
     },
     Down {
-        path: String,
         timeout: Option<u64>,
         count: Option<usize>,
         remote: bool,
     },
-    List {
-        path: String,
-    },
-    Sync {
-        path: String,
-    },
-    Fix {
-        path: String,
-    },
+    List,
+    Sync,
+    Fix,
+}
+
+#[derive(Debug)]
+pub(crate) struct Migration {
+    pub path: PathBuf,
+    pub command: MigrationSubcommand,
 }
 
 #[derive(Debug)]
 pub(crate) enum Command {
     Manual {
-        path: String,
+        path: PathBuf,
         format: ManualFormat,
     },
     Autocomplete {
-        path: String,
+        path: PathBuf,
         shell: clap_complete::Shell,
     },
     Migration(Migration),
     Init {
-        path: String,
+        path: PathBuf,
     },
 }
 
 pub(crate) struct ClapArgumentLoader {}
 
 impl ClapArgumentLoader {
+    fn get_absolute_path(matches: &clap::ArgMatches, name: &str) -> Result<PathBuf> {
+        let path_str: &String = matches.get_one(name).unwrap();
+        let path = std::path::Path::new(path_str);
+        if path.is_absolute() {
+            Ok(path.to_path_buf().clean())
+        } else {
+            Ok(std::env::current_dir()?.join(path).clean())
+        }
+    }
     pub(crate) fn root_command() -> clap::Command {
         clap::Command::new("qop")
             .version(env!("CARGO_PKG_VERSION"))
@@ -128,45 +133,40 @@ impl ClapArgumentLoader {
             .subcommand(
                 clap::Command::new("migration")
                     .about("Manages migrations.")
+                    .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml"))
+                    .subcommand_required(true)
                     .subcommand(
                         clap::Command::new("init")
-                            .about("Initializes the database.")
-                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml")),
+                            .about("Initializes the database."),
                     )
                     .subcommand(
                         clap::Command::new("new")
-                            .about("Creates a new migration.")
-                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml")),
+                            .about("Creates a new migration."),
                     )
                     .subcommand(
                         clap::Command::new("up")
                             .about("Runs the migrations.")
-                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml"))
                             .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
                             .arg(clap::Arg::new("count").short('c').long("count").required(false)),
                     )
                     .subcommand(
                         clap::Command::new("down")
                             .about("Rolls back the migrations.")
-                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml"))
                             .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
                             .arg(clap::Arg::new("remote").short('r').long("remote").required(false).num_args(0))
                             .arg(clap::Arg::new("count").short('c').long("count").required(false)),
                     )
                     .subcommand(
                         clap::Command::new("list")
-                            .about("Lists all applied migrations.")
-                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml")),
+                            .about("Lists all applied migrations."),
                     )
                     .subcommand(
                         clap::Command::new("sync")
-                            .about("Upserts all remote migrations locally.")
-                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml")),
+                            .about("Upserts all remote migrations locally."),
                     )
                     .subcommand(
                         clap::Command::new("fix")
-                            .about("Shuffles all non-run local migrations to the end of the chain.")
-                            .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml")),
+                            .about("Shuffles all non-run local migrations to the end of the chain."),
                     ),
             )
     }
@@ -182,7 +182,7 @@ impl ClapArgumentLoader {
 
         let cmd = if let Some(subc) = command.subcommand_matches("man") {
             Command::Manual {
-                path: subc.get_one::<String>("out").unwrap().into(),
+                path: Self::get_absolute_path(subc, "out")?,
                 format: match subc.get_one::<String>("format").unwrap().as_str() {
                     | "manpages" => ManualFormat::Manpages,
                     | "markdown" => ManualFormat::Markdown,
@@ -191,51 +191,43 @@ impl ClapArgumentLoader {
             }
         } else if let Some(subc) = command.subcommand_matches("autocomplete") {
             Command::Autocomplete {
-                path: subc.get_one::<String>("out").unwrap().into(),
+                path: Self::get_absolute_path(subc, "out")?,
                 shell: clap_complete::Shell::from_str(subc.get_one::<String>("shell").unwrap().as_str()).unwrap(),
             }
         } else if let Some(subc) = command.subcommand_matches("init") {
             Command::Init {
-                path: subc.get_one::<String>("path").unwrap().into(),
+                path: Self::get_absolute_path(subc, "path")?,
             }
         } else if let Some(subc) = command.subcommand_matches("migration") {
-            if let Some(subc) = subc.subcommand_matches("init") {
-                Command::Migration(Migration::Init {
-                    path: subc.get_one::<String>("path").unwrap().into(),
-                })
-            }
-            else if let Some(subc) = subc.subcommand_matches("new") {
-                Command::Migration(Migration::New {
-                    path: subc.get_one::<String>("path").unwrap().into(),
-                })
-            } else if let Some(subc) = subc.subcommand_matches("up") {
-                Command::Migration(Migration::Up {
-                    path: subc.get_one::<String>("path").unwrap().into(),
-                    timeout: subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
-                    count: subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
-                })
-            } else if let Some(subc) = subc.subcommand_matches("down") {
-                Command::Migration(Migration::Down {
-                    path: subc.get_one::<String>("path").unwrap().into(),
-                    timeout: subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
-                    count: subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
-                    remote: subc.get_flag("remote"),
-                })
-            } else if let Some(subc) = subc.subcommand_matches("list") {
-                Command::Migration(Migration::List {
-                    path: subc.get_one::<String>("path").unwrap().into(),
-                })
-            } else if let Some(subc) = subc.subcommand_matches("sync") {
-                Command::Migration(Migration::Sync {
-                    path: subc.get_one::<String>("path").unwrap().into(),
-                })
-            } else if let Some(subc) = subc.subcommand_matches("fix") {
-                Command::Migration(Migration::Fix {
-                    path: subc.get_one::<String>("path").unwrap().into(),
-                })
+            let path = Self::get_absolute_path(subc, "path")?;
+            let migration_cmd = if let Some(_) = subc.subcommand_matches("init") {
+                MigrationSubcommand::Init
+            } else if let Some(_) = subc.subcommand_matches("new") {
+                MigrationSubcommand::New
+            } else if let Some(up_subc) = subc.subcommand_matches("up") {
+                MigrationSubcommand::Up {
+                    timeout: up_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
+                    count: up_subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
+                }
+            } else if let Some(down_subc) = subc.subcommand_matches("down") {
+                MigrationSubcommand::Down {
+                    timeout: down_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
+                    count: down_subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
+                    remote: down_subc.get_flag("remote"),
+                }
+            } else if let Some(_) = subc.subcommand_matches("list") {
+                MigrationSubcommand::List
+            } else if let Some(_) = subc.subcommand_matches("sync") {
+                MigrationSubcommand::Sync
+            } else if let Some(_) = subc.subcommand_matches("fix") {
+                MigrationSubcommand::Fix
             } else {
-                return Err(anyhow::anyhow!("unknown command"));
-            }
+                unreachable!();
+            };
+            Command::Migration(Migration {
+                path,
+                command: migration_cmd,
+            })
         } else {
             return Err(anyhow::anyhow!("unknown command"));
         };
