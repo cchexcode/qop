@@ -133,7 +133,7 @@ impl ClapArgumentLoader {
             .subcommand(
                 clap::Command::new("migration")
                     .about("Manages migrations.")
-                    .arg(clap::Arg::new("path").short('p').long("path").default_value("./qop.toml"))
+                    .arg(clap::Arg::new("path").short('p').long("path").default_value("qop.toml"))
                     .subcommand_required(true)
                     .subcommand(
                         clap::Command::new("init")

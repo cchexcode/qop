@@ -4,11 +4,11 @@ version = "0.0.0"
 authors = ["cchexcode <alexanderh.weber@outlook.com>"]
 edition = "2024"
 license = "MIT"
-description = "A more powerful alternative to Makefiles."
+description = "A simple and powerful database migration tool."
 homepage = "https://github.com/cchexcode/qop"
 repository = "https://github.com/cchexcode/qop"
-keywords = ["make", "cli", "task", "runner"]
-categories = ["command-line-utilities"]
+keywords = ["database", "migration", "sql", "postgres", "cli"]
+categories = ["command-line-utilities", "database"]
 readme = "docs/README.md"
 
 [features]

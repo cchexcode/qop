@@ -15,6 +15,25 @@
 cargo install --path .
 ```
 
+## Getting Started
+
+1.  **Initialize a new project:**
+    ```bash
+    qop init
+    ```
+    This will create a `qop.toml` file in your current directory.
+
+2.  **Create your first migration:**
+    ```bash
+    qop migration new
+    ```
+    This will create a new directory with `up.sql` and `down.sql` files.
+
+3.  **Apply the migration:**
+    ```bash
+    qop migration up
+    ```
+
 ## Configuration
 
 `qop` is configured using a `qop.toml` file. Here is an example for PostgreSQL:
@@ -37,6 +56,17 @@ The migration files are expected to be in a directory relative to the `qop.toml`
 
 `qop` provides several commands to manage your database migrations.
 
+### `init`
+
+Initializes a new `qop` project by creating a `qop.toml` file in the current directory.
+
+```bash
+qop init --path path/to/your/qop.toml
+```
+
+**Arguments:**
+*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
+
 ### `migration`
 
 The core set of commands for managing migrations.
@@ -50,7 +80,7 @@ qop migration init --path path/to/your/qop.toml
 ```
 
 **Arguments:**
-*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `example/qop.toml`)
+*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
 
 #### `qop migration new`
 
@@ -69,7 +99,7 @@ migrations/
 ```
 
 **Arguments:**
-*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `example/qop.toml`)
+*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
 
 #### `qop migration up`
 
@@ -80,7 +110,7 @@ qop migration up --path path/to/your/qop.toml
 ```
 
 **Arguments:**
-*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `example/qop.toml`)
+*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
 *   `-c, --count <COUNT>`: The number of migrations to apply. If not specified, all pending migrations are applied.
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
 
@@ -93,9 +123,10 @@ qop migration down --path path/to/your/qop.toml
 ```
 
 **Arguments:**
-*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `example/qop.toml`)
+*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
 *   `-c, --count <COUNT>`: The number of migrations to revert. (default: 1)
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
+*   `-r, --remote`: Use the `down.sql` from the database instead of the local file.
 
 #### `qop migration list`
 
@@ -106,7 +137,29 @@ qop migration list --path path/to/your/qop.toml
 ```
 
 **Arguments:**
-*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `example/qop.toml`)
+*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
+
+#### `qop migration sync`
+
+Upserts all remote migrations locally. This is useful for syncing migrations across multiple developers.
+
+```bash
+qop migration sync --path path/to/your/qop.toml
+```
+
+**Arguments:**
+*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
+
+#### `qop migration fix`
+
+Shuffles all non-run local migrations to the end of the chain. This is useful when you have created migrations out of order.
+
+```bash
+qop migration fix --path path/to/your/qop.toml
+```
+
+**Arguments:**
+*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
 
 ### `manual`
 
@@ -115,11 +168,11 @@ Generates documentation for `qop`.
 #### `qop manual`
 
 ```bash
-qop manual --path docs/ --format markdown
+qop manual --path docs/manual --format markdown
 ```
 
 **Arguments:**
-*   `-p, --path <PATH>`: Path to write documentation to. (default: `docs/man`)
+*   `-p, --path <PATH>`: Path to write documentation to. (default: `docs/manual`)
 *   `--format <FORMAT>`: Format for the documentation. Can be `manpages` or `markdown`. (default: `manpages`)
 
 ### `autocomplete`
@@ -129,9 +182,9 @@ Generates shell completion scripts.
 #### `qop autocomplete`
 
 ```bash
-qop autocomplete --path completions/ --shell zsh
+qop autocomplete --path completions --shell zsh
 ```
 
 **Arguments:**
-*   `-p, --path <PATH>`: Path to write completion script to. (default: `docs/autocomplete`)
+*   `-p, --path <PATH>`: Path to write completion script to. (default: `completions`)
 *   `--shell <SHELL>`: The shell to generate completions for (e.g., `zsh`, `bash`, `fish`, `powershell`, `elvish`). (default: `zsh`)
