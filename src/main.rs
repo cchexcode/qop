@@ -21,7 +21,11 @@ async fn get_db_assets(path: &str, timeout: Option<u64>) -> Result<(Config, Pool
     let config: Config = toml::from_str(&std::fs::read_to_string(path)?)?;
     let pool = match &config.backend {
         | Backend::Postgres { host, port, username, password, database, .. } => {
-            let mut uri = format!("postgres://{}:{}@{}:{}/{}", username, password, host, port, database);
+            let mut uri = format!("postgres://");
+            if let (Some(username), Some(password)) = (username, password) {
+                uri.push_str(&format!("{}:{}@", username, password));
+            }
+            uri.push_str(&format!("{}:{}/{}", host, port, database));
             if let Some(seconds) = timeout {
                 uri.push_str(&format!("?statement_timeout={}", seconds * 1000));
             }
@@ -77,8 +81,8 @@ async fn main() -> Result<()> {
                 backend: Backend::Postgres {
                     host: "localhost".to_string(),
                     port: 5432,
-                    username: "postgres".to_string(),
-                    password: "postgres".to_string(),
+                    username: Some("postgres".to_string()),
+                    password: Some("postgres".to_string()),
                     database: "postgres".to_string(),
                     schema: "public".to_string(),
                     table: "__qop".to_string(),
