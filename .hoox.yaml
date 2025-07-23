@@ -1,0 +1,13 @@
+version: "0.3.0"
+
+.cargo_all: &cargo_all !inline |-
+  set -e
+  cargo build --all-features
+  cargo test --all
+  cargo doc --no-deps
+
+hooks:
+  "pre-commit": # pre-commit hook
+    - command: *cargo_all
+  "pre-push": # pre-push hook
+    - command: *cargo_all
