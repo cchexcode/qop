@@ -113,7 +113,7 @@ async fn main() -> Result<()> {
                         let mut tx = pool.begin().await?;
                         sqlx::query(
                             &format!(
-                                "CREATE TABLE IF NOT EXISTS {}.{} (id VARCHAR PRIMARY KEY, version VARCHAR NOT NULL, up VARCHAR NOT NULL, down VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, pre VARCHAR)",
+                                "CREATE TABLE IF NOT EXISTS {}.{} (id VARCHAR PRIMARY KEY, version VARCHAR NOT NULL, up VARCHAR NOT NULL, down VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, pre VARCHAR);",
                                 schema, table
                             )
                         )
@@ -126,7 +126,7 @@ async fn main() -> Result<()> {
                 }
             },
             | crate::args::MigrationSubcommand::Up { timeout, count } => {
-                let (config, pool) = get_db_assets(path, timeout).await?;
+                let (config, pool) = get_db_assets(path, None).await?;
                 let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
                 let local_migrations = get_local_migrations(path)?;
 
@@ -134,8 +134,14 @@ async fn main() -> Result<()> {
                     | Backend::Postgres { schema, table, .. } => {
                         let mut tx = pool.begin().await?;
 
+                        if let Some(seconds) = timeout {
+                            sqlx::query(&format!("SET LOCAL statement_timeout = '{}s';", seconds))
+                                .execute(&mut *tx)
+                                .await?;
+                        }
+
                         let applied_migrations: HashSet<String> =
-                            sqlx::query(&format!("SELECT id FROM {}.{} ORDER BY id ASC", schema, table))
+                            sqlx::query(&format!("SELECT id FROM {}.{} ORDER BY id ASC;", schema, table))
                                 .fetch_all(&mut *tx)
                                 .await?
                                 .into_iter()
@@ -143,7 +149,7 @@ async fn main() -> Result<()> {
                                 .collect();
 
                         let mut last_migration_id: Option<String> =
-                            sqlx::query(&format!("SELECT id FROM {}.{} ORDER BY id DESC LIMIT 1", schema, table))
+                            sqlx::query(&format!("SELECT id FROM {}.{} ORDER BY id DESC LIMIT 1;", schema, table))
                                 .fetch_optional(&mut *tx)
                                 .await?
                                 .map(|row| row.get("id"));
@@ -185,7 +191,7 @@ async fn main() -> Result<()> {
                                 sqlx::query(&up_sql).execute(&mut *tx).await?;
 
                                 sqlx::query(&format!(
-                                    "INSERT INTO {}.{} (id, version, up, down, pre) VALUES ($1, $2, $3, $4, $5)",
+                                    "INSERT INTO {}.{} (id, version, up, down, pre) VALUES ($1, $2, $3, $4, $5);",
                                     schema, table
                                 ))
                                 .bind(id)
@@ -208,14 +214,20 @@ async fn main() -> Result<()> {
                 }
             },
             | crate::args::MigrationSubcommand::Down { timeout, count, remote } => {
-                let (config, pool) = get_db_assets(path, timeout).await?;
+                let (config, pool) = get_db_assets(path, None).await?;
                 let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
                 match config.backend {
                     | Backend::Postgres { schema, table, .. } => {
                         let mut tx = pool.begin().await?;
 
+                        if let Some(seconds) = timeout {
+                            sqlx::query(&format!("SET LOCAL statement_timeout = '{}s';", seconds))
+                                .execute(&mut *tx)
+                                .await?;
+                        }
+
                         let last_migrations: Vec<PgRow> = sqlx::query(&format!(
-                            "SELECT id, down FROM {}.{} ORDER BY id DESC",
+                            "SELECT id, down FROM {}.{} ORDER BY id DESC;",
                             schema, table
                         ))
                         .fetch_all(&mut *tx)
@@ -245,7 +257,7 @@ async fn main() -> Result<()> {
                                 };
                                 println!("Reverting migration: {}", id);
                                 sqlx::query(&down_sql).execute(&mut *tx).await?;
-                                sqlx::query(&format!("DELETE FROM {}.{} WHERE id = $1", schema, table))
+                                sqlx::query(&format!("DELETE FROM {}.{} WHERE id = $1;", schema, table))
                                     .bind(&id)
                                     .execute(&mut *tx)
                                     .await?;
@@ -269,7 +281,7 @@ async fn main() -> Result<()> {
                         let mut tx = pool.begin().await?;
 
                         let applied_migrations: HashSet<String> =
-                            sqlx::query(&format!("SELECT id FROM {}.{} ORDER BY id ASC", schema, table))
+                            sqlx::query(&format!("SELECT id FROM {}.{} ORDER BY id ASC;", schema, table))
                                 .fetch_all(&mut *tx)
                                 .await?
                                 .into_iter()
@@ -327,7 +339,7 @@ async fn main() -> Result<()> {
                         let mut tx = pool.begin().await?;
 
                         let all_migrations: Vec<PgRow> =
-                            sqlx::query(&format!("SELECT id, up, down FROM {}.{} ORDER BY id ASC", schema, table))
+                            sqlx::query(&format!("SELECT id, up, down FROM {}.{} ORDER BY id ASC;", schema, table))
                                 .fetch_all(&mut *tx)
                                 .await?;
 
@@ -378,7 +390,7 @@ async fn main() -> Result<()> {
                         let mut tx = pool.begin().await?;
 
                         let applied_migrations: HashMap<String, NaiveDateTime> = sqlx::query(&format!(
-                            "SELECT id, created_at FROM {}.{} ORDER BY id ASC",
+                            "SELECT id, created_at FROM {}.{} ORDER BY id ASC;",
                             schema, table
                         ))
                         .fetch_all(&mut *tx)
