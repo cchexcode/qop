@@ -38,7 +38,20 @@ impl CallArgs {
 }
 
 #[derive(Debug)]
-pub(crate) enum MigrationSubcommand {
+pub(crate) enum MigrationApply {
+    Up {
+        id: String,
+        timeout: Option<u64>,
+    },
+    Down {
+        id: String,
+        timeout: Option<u64>,
+        remote: bool,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum MigrationCommand {
     Init,
     New,
     Up {
@@ -50,6 +63,7 @@ pub(crate) enum MigrationSubcommand {
         count: Option<usize>,
         remote: bool,
     },
+    Apply(MigrationApply),
     List,
     Sync,
     Fix,
@@ -58,7 +72,7 @@ pub(crate) enum MigrationSubcommand {
 #[derive(Debug)]
 pub(crate) struct Migration {
     pub path: PathBuf,
-    pub command: MigrationSubcommand,
+    pub command: MigrationCommand,
 }
 
 #[derive(Debug)]
@@ -167,6 +181,24 @@ impl ClapArgumentLoader {
                     .subcommand(
                         clap::Command::new("fix")
                             .about("Shuffles all non-run local migrations to the end of the chain."),
+                    )
+                    .subcommand(
+                        clap::Command::new("apply")
+                            .about("Applies or reverts a specific migration by ID.")
+                            .subcommand_required(true)
+                            .subcommand(
+                                clap::Command::new("up")
+                                    .about("Applies a specific migration.")
+                                    .arg(clap::Arg::new("id").help("Migration ID to apply").required(true))
+                                    .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false)),
+                            )
+                            .subcommand(
+                                clap::Command::new("down")
+                                    .about("Reverts a specific migration.")
+                                    .arg(clap::Arg::new("id").help("Migration ID to revert").required(true))
+                                    .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
+                                    .arg(clap::Arg::new("remote").short('r').long("remote").required(false).num_args(0)),
+                            ),
                     ),
             )
     }
@@ -201,26 +233,41 @@ impl ClapArgumentLoader {
         } else if let Some(subc) = command.subcommand_matches("migration") {
             let path = Self::get_absolute_path(subc, "path")?;
             let migration_cmd = if let Some(_) = subc.subcommand_matches("init") {
-                MigrationSubcommand::Init
+                MigrationCommand::Init
             } else if let Some(_) = subc.subcommand_matches("new") {
-                MigrationSubcommand::New
+                MigrationCommand::New
             } else if let Some(up_subc) = subc.subcommand_matches("up") {
-                MigrationSubcommand::Up {
+                MigrationCommand::Up {
                     timeout: up_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
                     count: up_subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
                 }
             } else if let Some(down_subc) = subc.subcommand_matches("down") {
-                MigrationSubcommand::Down {
+                MigrationCommand::Down {
                     timeout: down_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
                     count: down_subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
                     remote: down_subc.get_flag("remote"),
                 }
             } else if let Some(_) = subc.subcommand_matches("list") {
-                MigrationSubcommand::List
+                MigrationCommand::List
             } else if let Some(_) = subc.subcommand_matches("sync") {
-                MigrationSubcommand::Sync
+                MigrationCommand::Sync
             } else if let Some(_) = subc.subcommand_matches("fix") {
-                MigrationSubcommand::Fix
+                MigrationCommand::Fix
+            } else if let Some(apply_subc) = subc.subcommand_matches("apply") {
+                if let Some(up_subc) = apply_subc.subcommand_matches("up") {
+                    MigrationCommand::Apply(MigrationApply::Up {
+                        id: up_subc.get_one::<String>("id").unwrap().clone(),
+                        timeout: up_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
+                    })
+                } else if let Some(down_subc) = apply_subc.subcommand_matches("down") {
+                    MigrationCommand::Apply(MigrationApply::Down {
+                        id: down_subc.get_one::<String>("id").unwrap().clone(),
+                        timeout: down_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
+                        remote: down_subc.get_flag("remote"),
+                    })
+                } else {
+                    unreachable!();
+                }
             } else {
                 unreachable!();
             };

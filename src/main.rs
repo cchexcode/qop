@@ -6,13 +6,14 @@ use {
     crate::config::{Backend, Config},
     anyhow::{Context, Result},
     args::ManualFormat,
-    chrono::{NaiveDateTime, Utc},
+    chrono::{NaiveDateTime, Utc, Local, TimeZone},
     comfy_table::{
         modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, ContentArrangement, Table,
     },
     sqlx::{postgres::PgRow, Pool, Postgres, Row},
     std::{
         collections::{BTreeMap, HashMap, HashSet},
+        io::{self, Write},
         path::Path,
     },
 };
@@ -106,7 +107,7 @@ async fn main() -> Result<()> {
         | crate::args::Command::Migration(migration) => {
             let path = &migration.path;
             match migration.command {
-            | crate::args::MigrationSubcommand::Init => {
+            | crate::args::MigrationCommand::Init => {
                 let (config, pool) = get_db_assets(path, None).await?;
                 match config.backend {
                     | Backend::Postgres { schema, table, .. } => {
@@ -125,7 +126,7 @@ async fn main() -> Result<()> {
                     },
                 }
             },
-            | crate::args::MigrationSubcommand::Up { timeout, count } => {
+            | crate::args::MigrationCommand::Up { timeout, count } => {
                 let (config, pool) = get_db_assets(path, None).await?;
                 let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
                 let local_migrations = get_local_migrations(path)?;
@@ -154,6 +155,9 @@ async fn main() -> Result<()> {
                                 .await?
                                 .map(|row| row.get("id"));
 
+                        // Commit the initial query transaction
+                        tx.commit().await?;
+
                         let mut migrations_to_apply: Vec<String> =
                             local_migrations.difference(&applied_migrations).cloned().collect();
 
@@ -165,9 +169,44 @@ async fn main() -> Result<()> {
                             migrations_to_apply
                         };
 
+                        // Linear history enforcement: Check for out-of-order migrations
+                        if !applied_migrations.is_empty() && !migrations_to_apply.is_empty() {
+                            let max_applied_migration = applied_migrations.iter().max().cloned().unwrap_or_default();
+                            
+                            let out_of_order_migrations: Vec<&String> = migrations_to_apply
+                                .iter()
+                                .filter(|id| id.as_str() < max_applied_migration.as_str())
+                                .collect();
+
+                            if !out_of_order_migrations.is_empty() {
+                                println!("⚠️  Non-linear history detected!");
+                                println!("The following migrations would create a non-linear history:");
+                                for migration in &out_of_order_migrations {
+                                    println!("  - {}", migration);
+                                }
+                                println!("Latest applied migration: {}", max_applied_migration);
+                                println!();
+                                println!("This could cause issues with database schema consistency.");
+                                println!("Alternatively, you can run 'qop migration fix' to rename out-of-order migrations.");
+                                
+                                print!("Do you want to continue? [y/N]: ");
+                                io::stdout().flush()?;
+                                
+                                let mut input = String::new();
+                                io::stdin().read_line(&mut input)?;
+                                let input = input.trim().to_lowercase();
+                                
+                                if input != "y" && input != "yes" {
+                                    println!("Operation cancelled.");
+                                    return Ok(());
+                                }
+                            }
+                        }
+
                         if migrations_to_apply.is_empty() {
                             println!("All migrations are up to date.");
                         } else {
+                            // Apply each migration in its own transaction
                             for migration_id in &migrations_to_apply {
                                 let migration_path = migration_dir.join(migration_id);
                                 println!("Applying migration: {}", migration_path.display());
@@ -188,8 +227,20 @@ async fn main() -> Result<()> {
                                     },
                                 )?;
 
-                                sqlx::query(&up_sql).execute(&mut *tx).await?;
+                                // Start a new transaction for this migration
+                                let mut migration_tx = pool.begin().await?;
 
+                                // Set timeout for this transaction if specified
+                                if let Some(seconds) = timeout {
+                                    sqlx::query(&format!("SET LOCAL statement_timeout = '{}s';", seconds))
+                                        .execute(&mut *migration_tx)
+                                        .await?;
+                                }
+
+                                // Execute the migration SQL
+                                sqlx::query(&up_sql).execute(&mut *migration_tx).await?;
+
+                                // Record the migration in the tracking table
                                 sqlx::query(&format!(
                                     "INSERT INTO {}.{} (id, version, up, down, pre) VALUES ($1, $2, $3, $4, $5);",
                                     schema, table
@@ -199,21 +250,23 @@ async fn main() -> Result<()> {
                                 .bind(up_sql)
                                 .bind(down_sql)
                                 .bind(last_migration_id.as_deref())
-                                .execute(&mut *tx)
+                                .execute(&mut *migration_tx)
                                 .await?;
+
+                                // Commit this migration's transaction
+                                migration_tx.commit().await?;
+                                
                                 last_migration_id = Some(id.to_string());
                             }
 
                             println!("Applied {} migrations.", migrations_to_apply.len());
                         }
 
-                        tx.commit().await?;
-
                         Ok(())
                     },
                 }
             },
-            | crate::args::MigrationSubcommand::Down { timeout, count, remote } => {
+            | crate::args::MigrationCommand::Down { timeout, count, remote } => {
                 let (config, pool) = get_db_assets(path, None).await?;
                 let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
                 match config.backend {
@@ -239,9 +292,13 @@ async fn main() -> Result<()> {
                             last_migrations.into_iter().take(1).collect()
                         };
 
+                        // Commit the initial query transaction
+                        tx.commit().await?;
+
                         if migrations_to_revert.is_empty() {
                             println!("No migrations to revert.");
                         } else {
+                            // Revert each migration in its own transaction
                             for row in migrations_to_revert {
                                 let id: String = row.get("id");
                                 let down_sql: String = if remote {
@@ -256,22 +313,304 @@ async fn main() -> Result<()> {
                                     })?
                                 };
                                 println!("Reverting migration: {}", id);
-                                sqlx::query(&down_sql).execute(&mut *tx).await?;
+
+                                // Start a new transaction for this migration revert
+                                let mut revert_tx = pool.begin().await?;
+
+                                // Set timeout for this transaction if specified
+                                if let Some(seconds) = timeout {
+                                    sqlx::query(&format!("SET LOCAL statement_timeout = '{}s';", seconds))
+                                        .execute(&mut *revert_tx)
+                                        .await?;
+                                }
+
+                                // Execute the down migration SQL
+                                sqlx::query(&down_sql).execute(&mut *revert_tx).await?;
+
+                                // Remove the migration from the tracking table
                                 sqlx::query(&format!("DELETE FROM {}.{} WHERE id = $1;", schema, table))
                                     .bind(&id)
-                                    .execute(&mut *tx)
+                                    .execute(&mut *revert_tx)
                                     .await?;
+
+                                // Commit this migration revert's transaction
+                                revert_tx.commit().await?;
+
                                 println!("Migration {} reverted.", id);
                             }
                         }
-
-                        tx.commit().await?;
 
                         Ok(())
                     },
                 }
             },
-            | crate::args::MigrationSubcommand::Fix { .. } => {
+            | crate::args::MigrationCommand::Apply(apply_cmd) => {
+                match apply_cmd {
+                    | crate::args::MigrationApply::Up { id, timeout } => {
+                        let (config, pool) = get_db_assets(path, None).await?;
+                        let migration_dir = path
+                            .parent()
+                            .ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
+                        let local_migrations = get_local_migrations(path)?;
+
+                        // Normalize the migration ID to include "id=" prefix if not present
+                        let target_migration_id = if id.starts_with("id=") {
+                            id.clone()
+                        } else {
+                            format!("id={}", id)
+                        };
+
+                        match config.backend {
+                            | Backend::Postgres { schema, table, .. } => {
+                                let mut tx = pool.begin().await?;
+
+                                // Get current applied migrations
+                                let applied_migrations: HashSet<String> = sqlx::query(&format!(
+                                    "SELECT id FROM {}.{} ORDER BY id ASC;",
+                                    schema, table
+                                ))
+                                .fetch_all(&mut *tx)
+                                .await?
+                                .into_iter()
+                                .map(|row| row.get("id"))
+                                .collect();
+
+                                tx.commit().await?;
+
+                                // Check if migration exists locally
+                                if !local_migrations.contains(&target_migration_id) {
+                                    return Err(anyhow::anyhow!(
+                                        "Migration {} does not exist locally",
+                                        target_migration_id
+                                    ));
+                                }
+
+                                // Check if migration is already applied
+                                if applied_migrations.contains(&target_migration_id) {
+                                    println!("Migration {} is already applied.", target_migration_id);
+                                    return Ok(());
+                                }
+
+                                // Check for non-linear history
+                                let mut needs_confirmation = false;
+                                if !applied_migrations.is_empty() {
+                                    let max_applied_migration =
+                                        applied_migrations.iter().max().cloned().unwrap_or_default();
+
+                                    if target_migration_id.as_str() < max_applied_migration.as_str() {
+                                        println!("⚠️  Non-linear history detected!");
+                                        println!(
+                                            "Applying migration {} would create a non-linear history.",
+                                            target_migration_id
+                                        );
+                                        println!(
+                                            "Latest applied migration: {}",
+                                            max_applied_migration
+                                        );
+                                        println!();
+                                        println!("This could cause issues with database schema consistency.");
+                                        needs_confirmation = true;
+                                    }
+                                }
+
+                                if needs_confirmation {
+                                    print!("Do you want to continue? [y/N]: ");
+                                    io::stdout().flush()?;
+                                    
+                                    let mut input = String::new();
+                                    io::stdin().read_line(&mut input)?;
+                                    let input = input.trim().to_lowercase();
+                                    
+                                    if input != "y" && input != "yes" {
+                                        println!("Operation cancelled.");
+                                        return Ok(());
+                                    }
+                                }
+
+                                // Apply the migration
+                                let migration_path = migration_dir.join(&target_migration_id);
+                                let up_sql_path = migration_path.join("up.sql");
+                                let down_sql_path = migration_path.join("down.sql");
+
+                                let up_sql = std::fs::read_to_string(&up_sql_path).with_context(
+                                    || format!("Failed to read up migration: {}", up_sql_path.display()),
+                                )?;
+                                let down_sql = std::fs::read_to_string(&down_sql_path).with_context(
+                                    || {
+                                        format!(
+                                            "Failed to read down migration: {}",
+                                            down_sql_path.display()
+                                        )
+                                    },
+                                )?;
+
+                                // Get the latest migration for the pre field
+                                let mut tx = pool.begin().await?;
+                                let last_migration_id: Option<String> = sqlx::query(&format!(
+                                    "SELECT id FROM {}.{} ORDER BY id DESC LIMIT 1;",
+                                    schema, table
+                                ))
+                                .fetch_optional(&mut *tx)
+                                .await?
+                                .map(|row| row.get("id"));
+                                tx.commit().await?;
+
+                                // Execute the migration
+                                let mut migration_tx = pool.begin().await?;
+
+                                if let Some(seconds) = timeout {
+                                    sqlx::query(&format!("SET LOCAL statement_timeout = '{}s';", seconds))
+                                        .execute(&mut *migration_tx)
+                                        .await?;
+                                }
+
+                                println!("Applying migration: {}", target_migration_id);
+                                sqlx::query(&up_sql).execute(&mut *migration_tx).await?;
+
+                                sqlx::query(&format!(
+                                    "INSERT INTO {}.{} (id, version, up, down, pre) VALUES ($1, $2, $3, $4, $5);",
+                                    schema, table
+                                ))
+                                .bind(&target_migration_id)
+                                .bind(env!("CARGO_PKG_VERSION"))
+                                .bind(up_sql)
+                                .bind(down_sql)
+                                .bind(last_migration_id.as_deref())
+                                .execute(&mut *migration_tx)
+                                .await?;
+
+                                migration_tx.commit().await?;
+                                println!("Migration {} applied successfully.", target_migration_id);
+
+                                Ok(())
+                            },
+                        }
+                    },
+                    | crate::args::MigrationApply::Down { id, timeout, remote } => {
+                        let (config, pool) = get_db_assets(path, None).await?;
+                        let migration_dir = path
+                            .parent()
+                            .ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
+
+                        // Normalize the migration ID to include "id=" prefix if not present
+                        let target_migration_id = if id.starts_with("id=") {
+                            id.clone()
+                        } else {
+                            format!("id={}", id)
+                        };
+
+                        match config.backend {
+                            | Backend::Postgres { schema, table, .. } => {
+                                let mut tx = pool.begin().await?;
+
+                                // Get current applied migrations
+                                let applied_migrations: HashSet<String> = sqlx::query(&format!(
+                                    "SELECT id FROM {}.{} ORDER BY id ASC;",
+                                    schema, table
+                                ))
+                                .fetch_all(&mut *tx)
+                                .await?
+                                .into_iter()
+                                .map(|row| row.get("id"))
+                                .collect();
+
+                                tx.commit().await?;
+
+                                // Check if migration is applied
+                                if !applied_migrations.contains(&target_migration_id) {
+                                    return Err(anyhow::anyhow!(
+                                        "Migration {} is not currently applied",
+                                        target_migration_id
+                                    ));
+                                }
+
+                                // Check for non-linear history (reverting a migration that's not the latest)
+                                let mut needs_confirmation = false;
+                                if !applied_migrations.is_empty() {
+                                    let max_applied_migration =
+                                        applied_migrations.iter().max().cloned().unwrap_or_default();
+
+                                    if target_migration_id != max_applied_migration {
+                                        println!("⚠️  Non-linear history detected!");
+                                        println!(
+                                            "Reverting migration {} would create a non-linear history.",
+                                            target_migration_id
+                                        );
+                                        println!(
+                                            "Latest applied migration: {}",
+                                            max_applied_migration
+                                        );
+                                        println!();
+                                        println!("This could cause issues with database schema consistency.");
+                                        needs_confirmation = true;
+                                    }
+                                }
+
+                                if needs_confirmation {
+                                    print!("Do you want to continue? [y/N]: ");
+                                    io::stdout().flush()?;
+                                    
+                                    let mut input = String::new();
+                                    io::stdin().read_line(&mut input)?;
+                                    let input = input.trim().to_lowercase();
+                                    
+                                    if input != "y" && input != "yes" {
+                                        println!("Operation cancelled.");
+                                        return Ok(());
+                                    }
+                                }
+
+                                // Get the down SQL from database or local file based on remote flag
+                                let down_sql: String = if remote {
+                                    let mut tx = pool.begin().await?;
+                                    let migration_row = sqlx::query(&format!(
+                                        "SELECT down FROM {}.{} WHERE id = $1;",
+                                        schema, table
+                                    ))
+                                    .bind(&target_migration_id)
+                                    .fetch_one(&mut *tx)
+                                    .await?;
+
+                                    let sql: String = migration_row.get("down");
+                                    tx.commit().await?;
+                                    sql
+                                } else {
+                                    let down_sql_path = migration_dir.join(&target_migration_id).join("down.sql");
+                                    std::fs::read_to_string(&down_sql_path).with_context(|| {
+                                        format!(
+                                            "Failed to read down migration: {}",
+                                            down_sql_path.display()
+                                        )
+                                    })?
+                                };
+
+                                // Execute the down migration
+                                let mut revert_tx = pool.begin().await?;
+
+                                if let Some(seconds) = timeout {
+                                    sqlx::query(&format!("SET LOCAL statement_timeout = '{}s';", seconds))
+                                        .execute(&mut *revert_tx)
+                                        .await?;
+                                }
+
+                                println!("Reverting migration: {}", target_migration_id);
+                                sqlx::query(&down_sql).execute(&mut *revert_tx).await?;
+
+                                sqlx::query(&format!("DELETE FROM {}.{} WHERE id = $1;", schema, table))
+                                    .bind(&target_migration_id)
+                                    .execute(&mut *revert_tx)
+                                    .await?;
+
+                                revert_tx.commit().await?;
+                                println!("Migration {} reverted successfully.", target_migration_id);
+
+                                Ok(())
+                            },
+                        }
+                    },
+                }
+            },
+            | crate::args::MigrationCommand::Fix { .. } => {
                 let (config, pool) = get_db_assets(path, None).await?;
                 let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
                 let local_migrations = get_local_migrations(path)?;
@@ -331,7 +670,7 @@ async fn main() -> Result<()> {
                     },
                 }
             },
-            | crate::args::MigrationSubcommand::Sync { .. } => {
+            | crate::args::MigrationCommand::Sync { .. } => {
                 let (config, pool) = get_db_assets(path, None).await?;
                 let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
                 match config.backend {
@@ -381,7 +720,7 @@ async fn main() -> Result<()> {
                     },
                 }
             },
-            | crate::args::MigrationSubcommand::List { .. } => {
+            | crate::args::MigrationCommand::List { .. } => {
                 let (config, pool) = get_db_assets(path, None).await?;
                 let local_migrations = get_local_migrations(path)?;
 
@@ -417,8 +756,8 @@ async fn main() -> Result<()> {
                             .apply_modifier(UTF8_ROUND_CORNERS)
                             .set_content_arrangement(ContentArrangement::Dynamic)
                             .set_header(vec![
-                                Cell::new("Migration ID"),
-                                Cell::new("Applied At"),
+                                Cell::new("ID"),
+                                Cell::new("Remote"),
                                 Cell::new("Local"),
                             ]);
 
@@ -427,7 +766,10 @@ async fn main() -> Result<()> {
                         } else {
                             for (id, (applied_at, is_local)) in all_migrations {
                                 let applied_str = if let Some(timestamp) = applied_at {
-                                    timestamp.format("%Y-%m-%d %H:%M:%S").to_string()
+                                    // Convert naive datetime (assumed UTC) to local timezone
+                                    let utc_datetime = Utc.from_utc_datetime(&timestamp);
+                                    let local_datetime = utc_datetime.with_timezone(&Local);
+                                    local_datetime.format("%Y-%m-%d %H:%M:%S %Z").to_string()
                                 } else {
                                     "❌".to_string()
                                 };
@@ -447,7 +789,7 @@ async fn main() -> Result<()> {
                     },
                 }
             },
-            | crate::args::MigrationSubcommand::New { .. } => {
+            | crate::args::MigrationCommand::New { .. } => {
                 let config: Config = toml::from_str(
                     &std::fs::read_to_string(path)
                         .with_context(|| format!("Failed to read config file at: {}", path.display()))?,
