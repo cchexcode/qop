@@ -1,12 +1,16 @@
 pub mod args;
 pub mod reference;
 pub mod config;
+pub mod migration_diff;
 
 use {
-    crate::config::{Backend, Config},
+    crate::{
+        config::{Backend, Config, PostgresConnection, PostgresMigrations},
+        migration_diff::{display_migration_diff, parse_migration_operations},
+    },
     anyhow::{Context, Result},
     args::ManualFormat,
-    chrono::{NaiveDateTime, Utc, Local, TimeZone},
+    chrono::{Local, NaiveDateTime, TimeZone, Utc},
     comfy_table::{
         modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, ContentArrangement, Table,
     },
@@ -18,19 +22,28 @@ use {
     },
 };
 
+fn get_effective_timeout(config: &Config, provided_timeout: Option<u64>) -> Option<u64> {
+    match &config.backend {
+        Backend::Postgres { migrations, .. } => provided_timeout.or(migrations.timeout),
+    }
+}
+
 async fn get_db_assets(path: &Path, timeout: Option<u64>) -> Result<(Config, Pool<Postgres>)> {
     let config_content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read config file at: {}", path.display()))?;
     let config: Config = toml::from_str(&config_content)
         .with_context(|| format!("Failed to parse config file at: {}", path.display()))?;
     let pool = match &config.backend {
-        | Backend::Postgres { host, port, username, password, database, .. } => {
+        | Backend::Postgres { connection, migrations, .. } => {
             let mut uri = format!("postgres://");
-            if let (Some(username), Some(password)) = (username, password) {
+            if let (Some(username), Some(password)) = (&connection.username, &connection.password) {
                 uri.push_str(&format!("{}:{}@", username, password));
             }
-            uri.push_str(&format!("{}:{}/{}", host, port, database));
-            if let Some(seconds) = timeout {
+            uri.push_str(&format!("{}:{}/{}", connection.host, connection.port, connection.database));
+            
+            // Use the provided timeout, or fall back to config timeout
+            let effective_timeout = timeout.or(migrations.timeout);
+            if let Some(seconds) = effective_timeout {
                 uri.push_str(&format!("?statement_timeout={}", seconds * 1000));
             }
             sqlx::postgres::PgPoolOptions::new().max_connections(10).connect(&uri).await?
@@ -90,13 +103,18 @@ async fn main() -> Result<()> {
                 .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
             let config = Config {
                 backend: Backend::Postgres {
-                    host: "localhost".to_string(),
-                    port: 5432,
-                    username: Some("postgres".to_string()),
-                    password: Some("postgres".to_string()),
-                    database: "postgres".to_string(),
-                    schema: "public".to_string(),
+                    connection: PostgresConnection {
+                        host: "localhost".to_string(),
+                        port: 5432,
+                        username: Some("postgres".to_string()),
+                        password: Some("postgres".to_string()),
+                        database: "postgres".to_string(),
+                    },
+                    migrations: PostgresMigrations {
+                        timeout: Some(60),
+                    },
                     table: "__qop".to_string(),
+                    schema: "public".to_string(),
                 },
             };
             let toml = toml::to_string(&config)?;
@@ -126,16 +144,17 @@ async fn main() -> Result<()> {
                     },
                 }
             },
-            | crate::args::MigrationCommand::Up { timeout, count } => {
-                let (config, pool) = get_db_assets(path, None).await?;
+            | crate::args::MigrationCommand::Up { timeout, count, diff } => {
+                let (config, pool) = get_db_assets(path, timeout).await?;
                 let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
                 let local_migrations = get_local_migrations(path)?;
+                let effective_timeout = get_effective_timeout(&config, timeout);
 
                 match config.backend {
                     | Backend::Postgres { schema, table, .. } => {
                         let mut tx = pool.begin().await?;
 
-                        if let Some(seconds) = timeout {
+                        if let Some(seconds) = effective_timeout {
                             sqlx::query(&format!("SET LOCAL statement_timeout = '{}s';", seconds))
                                 .execute(&mut *tx)
                                 .await?;
@@ -206,10 +225,56 @@ async fn main() -> Result<()> {
                         if migrations_to_apply.is_empty() {
                             println!("All migrations are up to date.");
                         } else {
+                            // Show diff preview if --diff flag is specified
+                            if diff {
+                                let mut all_operations = Vec::new();
+                                
+                                println!("\n🔍 Analyzing {} migration(s) to be applied...", migrations_to_apply.len());
+                                
+                                for migration_id in &migrations_to_apply {
+                                    let migration_path = migration_dir.join(migration_id);
+                                    let up_sql_path = migration_path.join("up.sql");
+                                    
+                                    let up_sql = std::fs::read_to_string(&up_sql_path).with_context(
+                                        || format!("Failed to read up migration: {}", up_sql_path.display()),
+                                    )?;
+                                    
+                                    match parse_migration_operations(&up_sql) {
+                                        Ok(operations) => {
+                                            display_migration_diff(migration_id, &operations);
+                                            all_operations.extend(operations);
+                                        }
+                                        Err(e) => {
+                                            println!("\n⚠️  Could not parse migration {}: {}", migration_id, e);
+                                            println!("📄 Raw SQL content will be executed as-is.");
+                                        }
+                                    }
+                                }
+                                
+                                println!("\n📊 Migration Summary:");
+                                println!("  • {} migration(s) to apply", migrations_to_apply.len());
+                                println!("  • {} total operation(s) detected", all_operations.len());
+                                
+                                // Ask for confirmation when showing diff
+                                print!("\n❓ Do you want to apply these migrations? [y/N]: ");
+                                io::stdout().flush()?;
+                                
+                                let mut input = String::new();
+                                io::stdin().read_line(&mut input)?;
+                                let input = input.trim().to_lowercase();
+                                
+                                if input != "y" && input != "yes" {
+                                    println!("❌ Migration cancelled.");
+                                    return Ok(());
+                                }
+                                
+                                println!("\n🚀 Applying migrations...");
+                            }
+                            
                             // Apply each migration in its own transaction
                             for migration_id in &migrations_to_apply {
                                 let migration_path = migration_dir.join(migration_id);
-                                println!("Applying migration: {}", migration_path.display());
+                                println!("⏳ Applying migration: {}", migration_id);
                                 let id = migration_id.as_str();
 
                                 let up_sql_path = migration_path.join("up.sql");
@@ -231,7 +296,7 @@ async fn main() -> Result<()> {
                                 let mut migration_tx = pool.begin().await?;
 
                                 // Set timeout for this transaction if specified
-                                if let Some(seconds) = timeout {
+                                if let Some(seconds) = effective_timeout {
                                     sqlx::query(&format!("SET LOCAL statement_timeout = '{}s';", seconds))
                                         .execute(&mut *migration_tx)
                                         .await?;
@@ -256,24 +321,26 @@ async fn main() -> Result<()> {
                                 // Commit this migration's transaction
                                 migration_tx.commit().await?;
                                 
+                                println!("✅ Migration {} applied successfully.", migration_id);
                                 last_migration_id = Some(id.to_string());
                             }
 
-                            println!("Applied {} migrations.", migrations_to_apply.len());
+                            println!("\n🎉 Successfully applied {} migration(s)!", migrations_to_apply.len());
                         }
 
                         Ok(())
                     },
                 }
             },
-            | crate::args::MigrationCommand::Down { timeout, count, remote } => {
-                let (config, pool) = get_db_assets(path, None).await?;
+            | crate::args::MigrationCommand::Down { timeout, count, remote, diff } => {
+                let (config, pool) = get_db_assets(path, timeout).await?;
                 let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
+                let effective_timeout = get_effective_timeout(&config, timeout);
                 match config.backend {
                     | Backend::Postgres { schema, table, .. } => {
                         let mut tx = pool.begin().await?;
 
-                        if let Some(seconds) = timeout {
+                        if let Some(seconds) = effective_timeout {
                             sqlx::query(&format!("SET LOCAL statement_timeout = '{}s';", seconds))
                                 .execute(&mut *tx)
                                 .await?;
@@ -298,6 +365,55 @@ async fn main() -> Result<()> {
                         if migrations_to_revert.is_empty() {
                             println!("No migrations to revert.");
                         } else {
+                            // Show diff preview if --diff flag is specified
+                            if diff {
+                                println!("\n🔍 Analyzing {} migration(s) to be reverted...", migrations_to_revert.len());
+                                
+                                for row in &migrations_to_revert {
+                                    let id: String = row.get("id");
+                                    let down_sql: String = if remote {
+                                        row.get("down")
+                                    } else {
+                                        let down_sql_path = migration_dir.join(&id).join("down.sql");
+                                        std::fs::read_to_string(&down_sql_path).with_context(|| {
+                                            format!(
+                                                "Failed to read down migration: {}",
+                                                down_sql_path.display()
+                                            )
+                                        })?
+                                    };
+                                    
+                                    match parse_migration_operations(&down_sql) {
+                                        Ok(operations) => {
+                                            println!("\n📉 Migration {} (REVERT):", id);
+                                            display_migration_diff(&id, &operations);
+                                        }
+                                        Err(e) => {
+                                            println!("\n⚠️  Could not parse migration {}: {}", id, e);
+                                            println!("📄 Raw SQL content will be executed as-is.");
+                                        }
+                                    }
+                                }
+                                
+                                println!("\n📊 Revert Summary:");
+                                println!("  • {} migration(s) to revert", migrations_to_revert.len());
+                                
+                                // Ask for confirmation when showing diff
+                                print!("\n❓ Do you want to revert these migrations? [y/N]: ");
+                                io::stdout().flush()?;
+                                
+                                let mut input = String::new();
+                                io::stdin().read_line(&mut input)?;
+                                let input = input.trim().to_lowercase();
+                                
+                                if input != "y" && input != "yes" {
+                                    println!("❌ Revert cancelled.");
+                                    return Ok(());
+                                }
+                                
+                                println!("\n🔄 Reverting migrations...");
+                            }
+                            
                             // Revert each migration in its own transaction
                             for row in migrations_to_revert {
                                 let id: String = row.get("id");
@@ -318,7 +434,7 @@ async fn main() -> Result<()> {
                                 let mut revert_tx = pool.begin().await?;
 
                                 // Set timeout for this transaction if specified
-                                if let Some(seconds) = timeout {
+                                if let Some(seconds) = effective_timeout {
                                     sqlx::query(&format!("SET LOCAL statement_timeout = '{}s';", seconds))
                                         .execute(&mut *revert_tx)
                                         .await?;
@@ -347,7 +463,8 @@ async fn main() -> Result<()> {
             | crate::args::MigrationCommand::Apply(apply_cmd) => {
                 match apply_cmd {
                     | crate::args::MigrationApply::Up { id, timeout } => {
-                        let (config, pool) = get_db_assets(path, None).await?;
+                        let (config, pool) = get_db_assets(path, timeout).await?;
+                        let effective_timeout = get_effective_timeout(&config, timeout);
                         let migration_dir = path
                             .parent()
                             .ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
@@ -458,7 +575,7 @@ async fn main() -> Result<()> {
                                 // Execute the migration
                                 let mut migration_tx = pool.begin().await?;
 
-                                if let Some(seconds) = timeout {
+                                if let Some(seconds) = effective_timeout {
                                     sqlx::query(&format!("SET LOCAL statement_timeout = '{}s';", seconds))
                                         .execute(&mut *migration_tx)
                                         .await?;
@@ -487,7 +604,8 @@ async fn main() -> Result<()> {
                         }
                     },
                     | crate::args::MigrationApply::Down { id, timeout, remote } => {
-                        let (config, pool) = get_db_assets(path, None).await?;
+                        let (config, pool) = get_db_assets(path, timeout).await?;
+                        let effective_timeout = get_effective_timeout(&config, timeout);
                         let migration_dir = path
                             .parent()
                             .ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
@@ -587,7 +705,7 @@ async fn main() -> Result<()> {
                                 // Execute the down migration
                                 let mut revert_tx = pool.begin().await?;
 
-                                if let Some(seconds) = timeout {
+                                if let Some(seconds) = effective_timeout {
                                     sqlx::query(&format!("SET LOCAL statement_timeout = '{}s';", seconds))
                                         .execute(&mut *revert_tx)
                                         .await?;
@@ -784,6 +902,66 @@ async fn main() -> Result<()> {
                         }
 
                         tx.commit().await?;
+
+                        Ok(())
+                    },
+                }
+            },
+            | crate::args::MigrationCommand::Diff => {
+                let (config, pool) = get_db_assets(path, None).await?;
+                let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
+                let local_migrations = get_local_migrations(path)?;
+
+                match config.backend {
+                    | Backend::Postgres { schema, table, .. } => {
+                        let mut tx = pool.begin().await?;
+
+                        let applied_migrations: HashSet<String> =
+                            sqlx::query(&format!("SELECT id FROM {}.{} ORDER BY id ASC;", schema, table))
+                                .fetch_all(&mut *tx)
+                                .await?
+                                .into_iter()
+                                .map(|row| row.get("id"))
+                                .collect();
+
+                        tx.commit().await?;
+
+                        let mut migrations_to_apply: Vec<String> =
+                            local_migrations.difference(&applied_migrations).cloned().collect();
+
+                        migrations_to_apply.sort();
+
+                        if migrations_to_apply.is_empty() {
+                            println!("All migrations are up to date.");
+                        } else {
+                            println!("\n🔍 Analyzing {} migration(s) that would be applied...", migrations_to_apply.len());
+                            
+                            let mut all_operations = Vec::new();
+                            
+                            for migration_id in &migrations_to_apply {
+                                let migration_path = migration_dir.join(migration_id);
+                                let up_sql_path = migration_path.join("up.sql");
+                                
+                                let up_sql = std::fs::read_to_string(&up_sql_path).with_context(
+                                    || format!("Failed to read up migration: {}", up_sql_path.display()),
+                                )?;
+                                
+                                match parse_migration_operations(&up_sql) {
+                                    Ok(operations) => {
+                                        display_migration_diff(migration_id, &operations);
+                                        all_operations.extend(operations);
+                                    }
+                                    Err(e) => {
+                                        println!("\n⚠️  Could not parse migration {}: {}", migration_id, e);
+                                        println!("📄 Raw SQL content will be executed as-is.");
+                                    }
+                                }
+                            }
+                            
+                            println!("\n📊 Migration Summary:");
+                            println!("  • {} migration(s) to apply", migrations_to_apply.len());
+                            println!("  • {} total operation(s) detected", all_operations.len());
+                        }
 
                         Ok(())
                     },

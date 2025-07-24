@@ -30,6 +30,9 @@ impl CallArgs {
         }
 
         match &self.command {
+            | Command::Migration(Migration { command: MigrationCommand::Diff, .. }) => anyhow::bail!("diff is experimental"),
+            | Command::Migration(Migration { command: MigrationCommand::Up { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
+            | Command::Migration(Migration { command: MigrationCommand::Down { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
             | _ => (),
         }
 
@@ -57,16 +60,19 @@ pub(crate) enum MigrationCommand {
     Up {
         timeout: Option<u64>,
         count: Option<usize>,
+        diff: bool,
     },
     Down {
         timeout: Option<u64>,
         count: Option<usize>,
         remote: bool,
+        diff: bool,
     },
     Apply(MigrationApply),
     List,
     Sync,
     Fix,
+    Diff,
 }
 
 #[derive(Debug)]
@@ -161,14 +167,16 @@ impl ClapArgumentLoader {
                         clap::Command::new("up")
                             .about("Runs the migrations.")
                             .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
-                            .arg(clap::Arg::new("count").short('c').long("count").required(false)),
+                            .arg(clap::Arg::new("count").short('c').long("count").required(false))
+                            .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying")),
                     )
                     .subcommand(
                         clap::Command::new("down")
                             .about("Rolls back the migrations.")
                             .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
                             .arg(clap::Arg::new("remote").short('r').long("remote").required(false).num_args(0))
-                            .arg(clap::Arg::new("count").short('c').long("count").required(false)),
+                            .arg(clap::Arg::new("count").short('c').long("count").required(false))
+                            .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying")),
                     )
                     .subcommand(
                         clap::Command::new("list")
@@ -181,6 +189,10 @@ impl ClapArgumentLoader {
                     .subcommand(
                         clap::Command::new("fix")
                             .about("Shuffles all non-run local migrations to the end of the chain."),
+                    )
+                    .subcommand(
+                        clap::Command::new("diff")
+                            .about("Shows pending migration operations without applying them."),
                     )
                     .subcommand(
                         clap::Command::new("apply")
@@ -240,12 +252,14 @@ impl ClapArgumentLoader {
                 MigrationCommand::Up {
                     timeout: up_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
                     count: up_subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
+                    diff: up_subc.get_flag("diff"),
                 }
             } else if let Some(down_subc) = subc.subcommand_matches("down") {
                 MigrationCommand::Down {
                     timeout: down_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
                     count: down_subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
                     remote: down_subc.get_flag("remote"),
+                    diff: down_subc.get_flag("diff"),
                 }
             } else if let Some(_) = subc.subcommand_matches("list") {
                 MigrationCommand::List
@@ -253,6 +267,8 @@ impl ClapArgumentLoader {
                 MigrationCommand::Sync
             } else if let Some(_) = subc.subcommand_matches("fix") {
                 MigrationCommand::Fix
+            } else if let Some(_) = subc.subcommand_matches("diff") {
+                MigrationCommand::Diff
             } else if let Some(apply_subc) = subc.subcommand_matches("apply") {
                 if let Some(up_subc) = apply_subc.subcommand_matches("up") {
                     MigrationCommand::Apply(MigrationApply::Up {
