@@ -1,8 +1,7 @@
 [backend.postgres]
 table = "__qop"
 schema = "public"
-host = "localhost"
-port = 5432
-database = "postgres"
-username = "postgres"
-password = "postgres"
+[backend.postgres.connection]
+from_env = "QOP_BACKEND_POSTGRES_CONNECTION"
+[backend.postgres.migrations]
+timeout = 60

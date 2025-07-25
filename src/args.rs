@@ -54,6 +54,13 @@ pub(crate) enum MigrationApply {
 }
 
 #[derive(Debug)]
+pub(crate) enum HistoryCommand {
+    Sync,
+    Fix,
+}
+
+
+#[derive(Debug)]
 pub(crate) enum MigrationCommand {
     Init,
     New,
@@ -70,8 +77,7 @@ pub(crate) enum MigrationCommand {
     },
     Apply(MigrationApply),
     List,
-    Sync,
-    Fix,
+    History(HistoryCommand),
     Diff,
 }
 
@@ -183,12 +189,17 @@ impl ClapArgumentLoader {
                             .about("Lists all applied migrations."),
                     )
                     .subcommand(
-                        clap::Command::new("sync")
-                            .about("Upserts all remote migrations locally."),
-                    )
-                    .subcommand(
-                        clap::Command::new("fix")
-                            .about("Shuffles all non-run local migrations to the end of the chain."),
+                        clap::Command::new("history")
+                            .about("Manages migration history.")
+                            .subcommand_required(true)
+                            .subcommand(
+                                clap::Command::new("sync")
+                                    .about("Upserts all remote migrations locally."),
+                            )
+                            .subcommand(
+                                clap::Command::new("fix")
+                                    .about("Shuffles all non-run local migrations to the end of the chain."),
+                            ),
                     )
                     .subcommand(
                         clap::Command::new("diff")
@@ -263,10 +274,15 @@ impl ClapArgumentLoader {
                 }
             } else if let Some(_) = subc.subcommand_matches("list") {
                 MigrationCommand::List
-            } else if let Some(_) = subc.subcommand_matches("sync") {
-                MigrationCommand::Sync
-            } else if let Some(_) = subc.subcommand_matches("fix") {
-                MigrationCommand::Fix
+            } else if let Some(history_subc) = subc.subcommand_matches("history") {
+                let history_cmd = if let Some(_) = history_subc.subcommand_matches("sync") {
+                    HistoryCommand::Sync
+                } else if let Some(_) = history_subc.subcommand_matches("fix") {
+                    HistoryCommand::Fix
+                } else {
+                    unreachable!();
+                };
+                MigrationCommand::History(history_cmd)
             } else if let Some(_) = subc.subcommand_matches("diff") {
                 MigrationCommand::Diff
             } else if let Some(apply_subc) = subc.subcommand_matches("apply") {

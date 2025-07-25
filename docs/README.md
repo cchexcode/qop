@@ -39,15 +39,25 @@ cargo install --path .
 `qop` is configured using a `qop.toml` file. Here is an example for PostgreSQL:
 
 ```toml
-[backend]
-type = "postgres"
-host = "localhost"
-port = 5432
-username = "postgres"
-password = "password"
-database = "postgres"
+[backend.postgres]
+connection = { static = "postgresql://postgres:password@localhost:5432/postgres" }
 schema = "public"
 table = "migrations"
+
+[backend.postgres.migrations]
+timeout = 30
+```
+
+You can also use environment variables for the connection string:
+
+```toml
+[backend.postgres]
+connection = { from_env = "DATABASE_URL" }
+schema = "public"
+table = "migrations"
+
+[backend.postgres.migrations]
+timeout = 30
 ```
 
 The migration files are expected to be in a directory relative to the `qop.toml` file.
@@ -139,23 +149,27 @@ qop migration list --path path/to/your/qop.toml
 **Arguments:**
 *   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
 
-#### `qop migration sync`
+#### `qop migration history`
+
+Manages migration history with commands for syncing and fixing migration order.
+
+##### `qop migration history sync`
 
 Upserts all remote migrations locally. This is useful for syncing migrations across multiple developers.
 
 ```bash
-qop migration sync --path path/to/your/qop.toml
+qop migration history sync --path path/to/your/qop.toml
 ```
 
 **Arguments:**
 *   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
 
-#### `qop migration fix`
+##### `qop migration history fix`
 
 Shuffles all non-run local migrations to the end of the chain. This is useful when you have created migrations out of order.
 
 ```bash
-qop migration fix --path path/to/your/qop.toml
+qop migration history fix --path path/to/your/qop.toml
 ```
 
 **Arguments:**
