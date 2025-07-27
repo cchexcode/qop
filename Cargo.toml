@@ -7,7 +7,7 @@ license = "MIT"
 description = "A simple and powerful database migration tool."
 homepage = "https://github.com/cchexcode/qop"
 repository = "https://github.com/cchexcode/qop"
-keywords = ["database", "migration", "sql", "postgres", "cli"]
+keywords = ["database", "migration", "sql", "postgres", "sqlite", "cli"]
 categories = ["command-line-utilities", "database"]
 readme = "docs/README.md"
 
