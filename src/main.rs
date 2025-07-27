@@ -55,87 +55,86 @@ async fn main() -> Result<()> {
                 .with_context(|| format!("Failed to write config file to: {}", path.display()))?;
             Ok(())
         },
-        | crate::args::Command::Migration(migration) => {
-            let path = &migration.path;
-            match migration.subsystem {
-            | crate::args::Subsystem::Postgres(postgres_cmd) => match postgres_cmd {
+        | crate::args::Command::Subsystem(subsystem) => {
+            match subsystem {
+            | crate::args::Subsystem::Postgres { path, command: postgres_cmd } => match postgres_cmd {
             | crate::subsystem::postgres::commands::Command::Init => {
-                crate::subsystem::postgres::migration::init(path).await
+                crate::subsystem::postgres::migration::init(&path).await
             },
             | crate::subsystem::postgres::commands::Command::Up { timeout, count, diff } => {
-                crate::subsystem::postgres::migration::up(path, timeout, count, diff).await
+                crate::subsystem::postgres::migration::up(&path, timeout, count, diff).await
             },
             | crate::subsystem::postgres::commands::Command::Down { timeout, count, remote, diff } => {
-                crate::subsystem::postgres::migration::down(path, timeout, count, remote, diff).await
+                crate::subsystem::postgres::migration::down(&path, timeout, count, remote, diff).await
             },
             | crate::subsystem::postgres::commands::Command::Apply(apply_cmd) => {
                 match apply_cmd {
                     | crate::subsystem::postgres::commands::MigrationApply::Up { id, timeout } => {
-                        crate::subsystem::postgres::migration::apply_up(path, &id, timeout).await
+                        crate::subsystem::postgres::migration::apply_up(&path, &id, timeout).await
                     },
                     | crate::subsystem::postgres::commands::MigrationApply::Down { id, timeout, remote } => {
-                        crate::subsystem::postgres::migration::apply_down(path, &id, timeout, remote).await
+                        crate::subsystem::postgres::migration::apply_down(&path, &id, timeout, remote).await
                     },
                 }
             },
             | crate::subsystem::postgres::commands::Command::List => {
-                crate::subsystem::postgres::migration::list(path).await
+                crate::subsystem::postgres::migration::list(&path).await
             },
             | crate::subsystem::postgres::commands::Command::History(history_cmd) => {
                 match history_cmd {
                     | crate::subsystem::postgres::commands::HistoryCommand::Fix => {
-                        crate::subsystem::postgres::migration::history_fix(path).await
+                        crate::subsystem::postgres::migration::history_fix(&path).await
                     },
                     | crate::subsystem::postgres::commands::HistoryCommand::Sync => {
-                        crate::subsystem::postgres::migration::history_sync(path).await
+                        crate::subsystem::postgres::migration::history_sync(&path).await
                     },
                 }
             },
             | crate::subsystem::postgres::commands::Command::Diff => {
-                crate::subsystem::postgres::migration::diff(path).await
+                crate::subsystem::postgres::migration::diff(&path).await
             },
             | crate::subsystem::postgres::commands::Command::New => {
-                crate::subsystem::postgres::migration::new_migration(path).await
+                crate::subsystem::postgres::migration::new_migration(&path).await
             }
             },
-            | crate::args::Subsystem::Sqlite(sqlite_cmd) => match sqlite_cmd {
+            | crate::args::Subsystem::Sqlite { path, command: sqlite_cmd } => match sqlite_cmd {
             | crate::subsystem::sqlite::commands::Command::Init => {
-                crate::subsystem::sqlite::migration::init(path).await
+                crate::subsystem::sqlite::migration::init(&path).await
             },
             | crate::subsystem::sqlite::commands::Command::Up { timeout, count, diff } => {
-                crate::subsystem::sqlite::migration::up(path, timeout, count, diff).await
+                crate::subsystem::sqlite::migration::up(&path, timeout, count, diff).await
             },
             | crate::subsystem::sqlite::commands::Command::Down { timeout, count, remote, diff } => {
-                crate::subsystem::sqlite::migration::down(path, timeout, count, remote, diff).await
+                crate::subsystem::sqlite::migration::down(&path, timeout, count, remote, diff).await
             },
             | crate::subsystem::sqlite::commands::Command::Apply(apply_cmd) => {
                 match apply_cmd {
                     | crate::subsystem::sqlite::commands::MigrationApply::Up { id, timeout } => {
-                        crate::subsystem::sqlite::migration::apply_up(path, &id, timeout).await
+                        crate::subsystem::sqlite::migration::apply_up(&path, &id, timeout).await
                     },
                     | crate::subsystem::sqlite::commands::MigrationApply::Down { id, timeout, remote } => {
-                        crate::subsystem::sqlite::migration::apply_down(path, &id, timeout, remote).await
+                        crate::subsystem::sqlite::migration::apply_down(&path, &id, timeout, remote).await
                     },
                 }
             },
             | crate::subsystem::sqlite::commands::Command::List => {
-                crate::subsystem::sqlite::migration::list(path).await
+                crate::subsystem::sqlite::migration::list(&path).await
             },
             | crate::subsystem::sqlite::commands::Command::History(history_cmd) => {
                 match history_cmd {
                     | crate::subsystem::sqlite::commands::HistoryCommand::Fix => {
-                        crate::subsystem::sqlite::migration::history_fix(path).await
+                        crate::subsystem::sqlite::migration::history_fix(&path).await
                     },
                     | crate::subsystem::sqlite::commands::HistoryCommand::Sync => {
-                        crate::subsystem::sqlite::migration::history_sync(path).await
+                        crate::subsystem::sqlite::migration::history_sync(&path).await
                     },
                 }
             },
             | crate::subsystem::sqlite::commands::Command::Diff => {
-                crate::subsystem::sqlite::migration::diff(path).await
+                crate::subsystem::sqlite::migration::diff(&path).await
             },
             | crate::subsystem::sqlite::commands::Command::New => {
-                crate::subsystem::sqlite::migration::new_migration(path).await
+                crate::subsystem::sqlite::migration::new_migration(&path).await
             }
             }
             }

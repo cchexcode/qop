@@ -30,12 +30,12 @@ impl CallArgs {
         }
 
         match &self.command {
-            | Command::Migration(Migration { subsystem: Subsystem::Postgres(crate::subsystem::postgres::commands::Command::Diff), .. }) => anyhow::bail!("diff is experimental"),
-            | Command::Migration(Migration { subsystem: Subsystem::Postgres(crate::subsystem::postgres::commands::Command::Up { diff: true, .. }), .. }) => anyhow::bail!("diff is experimental"),
-            | Command::Migration(Migration { subsystem: Subsystem::Postgres(crate::subsystem::postgres::commands::Command::Down { diff: true, .. }), .. }) => anyhow::bail!("diff is experimental"),
-            | Command::Migration(Migration { subsystem: Subsystem::Sqlite(crate::subsystem::sqlite::commands::Command::Diff), .. }) => anyhow::bail!("diff is experimental"),
-            | Command::Migration(Migration { subsystem: Subsystem::Sqlite(crate::subsystem::sqlite::commands::Command::Up { diff: true, .. }), .. }) => anyhow::bail!("diff is experimental"),
-            | Command::Migration(Migration { subsystem: Subsystem::Sqlite(crate::subsystem::sqlite::commands::Command::Down { diff: true, .. }), .. }) => anyhow::bail!("diff is experimental"),
+            | Command::Subsystem(Subsystem::Postgres { command: crate::subsystem::postgres::commands::Command::Diff, .. }) => anyhow::bail!("diff is experimental"),
+            | Command::Subsystem(Subsystem::Postgres { command: crate::subsystem::postgres::commands::Command::Up { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
+            | Command::Subsystem(Subsystem::Postgres { command: crate::subsystem::postgres::commands::Command::Down { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
+            | Command::Subsystem(Subsystem::Sqlite { command: crate::subsystem::sqlite::commands::Command::Diff, .. }) => anyhow::bail!("diff is experimental"),
+            | Command::Subsystem(Subsystem::Sqlite { command: crate::subsystem::sqlite::commands::Command::Up { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
+            | Command::Subsystem(Subsystem::Sqlite { command: crate::subsystem::sqlite::commands::Command::Down { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
             | _ => (),
         }
 
@@ -45,15 +45,16 @@ impl CallArgs {
 
 #[derive(Debug)]
 pub(crate) enum Subsystem {
-    Postgres(crate::subsystem::postgres::commands::Command),
-    Sqlite(crate::subsystem::sqlite::commands::Command),
+    Postgres {
+        path: PathBuf,
+        command: crate::subsystem::postgres::commands::Command,
+    },
+    Sqlite {
+        path: PathBuf,
+        command: crate::subsystem::sqlite::commands::Command,
+    },
 }
 
-#[derive(Debug)]
-pub(crate) struct Migration {
-    pub path: PathBuf,
-    pub subsystem: Subsystem,
-}
 
 #[derive(Debug)]
 pub(crate) enum Command {
@@ -65,7 +66,7 @@ pub(crate) enum Command {
         path: PathBuf,
         shell: clap_complete::Shell,
     },
-    Migration(Migration),
+    Subsystem(Subsystem),
     Init {
         path: PathBuf,
     },
@@ -348,9 +349,9 @@ impl ClapArgumentLoader {
                 } else {
                     unreachable!();
                 };
-                Command::Migration(Migration {
+                Command::Subsystem(Subsystem::Postgres {
                     path,
-                    subsystem: Subsystem::Postgres(postgres_cmd),
+                    command: postgres_cmd,
                 })
             } else if let Some(sqlite_subc) = subsystem_subc.subcommand_matches("sqlite") {
                 let path = Self::get_absolute_path(sqlite_subc, "path")?;
@@ -402,9 +403,9 @@ impl ClapArgumentLoader {
                 } else {
                     unreachable!();
                 };
-                Command::Migration(Migration {
+                Command::Subsystem(Subsystem::Sqlite {
                     path,
-                    subsystem: Subsystem::Sqlite(sqlite_cmd),
+                    command: sqlite_cmd,
                 })
             } else {
                 return Err(anyhow::anyhow!("subsystem required"));
