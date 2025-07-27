@@ -40,13 +40,12 @@ impl WithVersion {
 #[serde(rename_all = "snake_case")]
 pub struct Config {
     pub version: String,
-    pub backend: Backend,
+    pub subsystem: Subsystem,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PostgresMigrations {
-    pub timeout: Option<u64>,
 }
 
 
@@ -60,10 +59,10 @@ pub enum DataSource<T: Serialize + DeserializeOwned> {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Backend {
+pub enum Subsystem {
     Postgres {
         connection: DataSource<String>,
-        migrations: PostgresMigrations,
+        timeout: Option<u64>,
         schema: String,
         table: String,
     },
