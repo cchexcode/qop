@@ -1,7 +1,0 @@
-version = ">=0.0.0,<1.0.0"
-[subsystem.postgres]
-table = "__qop"
-schema = "public"
-timeout = 60
-[subsystem.postgres.connection]
-from_env = "QOP_BACKEND_POSTGRES_CONNECTION"
