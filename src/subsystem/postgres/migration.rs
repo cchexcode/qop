@@ -260,7 +260,7 @@ pub(crate) async fn get_db_assets(path: &Path) -> Result<(SubsystemPostgres, Poo
             let cli_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
             if cli_version.release() != &[0, 0, 0] {
                 let last_migration_version = Version::from_str(&version)?;
-                if last_migration_version < cli_version {
+                if last_migration_version > cli_version {
                     anyhow::bail!("Latest migration table version is older than the CLI version. Please run 'qop subsystem postgres history fix' to rename out-of-order migrations.");
                 }
             }
