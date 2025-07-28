@@ -19,9 +19,7 @@ pub(crate) fn get_effective_timeout(config: &SubsystemPostgres, provided_timeout
 
 pub(crate) fn build_table_query<'a>(base_sql: &'a str, schema: &str, table: &str) -> QueryBuilder<'a, Postgres> {
     let mut query = QueryBuilder::new(base_sql);
-    query.push(schema);
-    query.push(".");
-    query.push(table);
+    query.push(format!("{}.{}", schema, table));
     query
 }
 
@@ -30,8 +28,7 @@ where
     E: sqlx::Executor<'e, Database = Postgres>,
 {
     if let Some(seconds) = timeout_seconds {
-        sqlx::query("SET LOCAL statement_timeout = $1")
-            .bind(format!("{}s", seconds))
+        sqlx::query(&format!("SET LOCAL statement_timeout = '{}s'", seconds))
             .execute(executor)
             .await?;
     }
