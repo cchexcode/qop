@@ -184,7 +184,7 @@ pub(crate) async fn execute_sql_statements(
     Ok(())
 }
 
-pub(crate) async fn get_db_assets(path: &Path) -> Result<(SubsystemSqlite, Pool<Sqlite>)> {
+pub(crate) async fn get_db_assets(path: &Path, check_cli_version: bool) -> Result<(SubsystemSqlite, Pool<Sqlite>)> {
     use {sqlx::sqlite::SqlitePoolOptions, crate::config::{Config, Subsystem}};
     
     let config_content = std::fs::read_to_string(path)
@@ -215,32 +215,33 @@ pub(crate) async fn get_db_assets(path: &Path) -> Result<(SubsystemSqlite, Pool<
     
     let pool = SqlitePoolOptions::new().max_connections(1).connect(&uri).await?;
     
-    // Check if table exists before trying to get version
-    let mut tx = pool.begin().await?;
-    let table_exists = sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
-        .bind(&sqlite_config.table)
-        .fetch_optional(&mut *tx)
-        .await?
-        .is_some();
-    
-    if table_exists {
-        let last_migration_version = get_table_version(&mut tx, &sqlite_config.table).await?;
-
-        match last_migration_version {
-            | Some(version) => {
-                let cli_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
-                if cli_version.release() != &[0, 0, 0] {
-                    let last_migration_version = Version::from_str(&version)?;
-                    if last_migration_version > cli_version {
-                        anyhow::bail!("Latest migration table version is older than the CLI version. Please run 'qop subsystem sqlite history fix' to rename out-of-order migrations.");
+    if check_cli_version {
+        // Check if table exists before trying to get version
+        let mut tx = pool.begin().await?;
+        let table_exists = sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+            .bind(&sqlite_config.table)
+            .fetch_optional(&mut *tx)
+            .await?
+            .is_some();
+        
+        if table_exists {
+            let last_migration_version = get_table_version(&mut tx, &sqlite_config.table).await?;
+            match last_migration_version {
+                | Some(version) => {
+                    let cli_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
+                    if cli_version.release() != &[0, 0, 0] {
+                        let last_migration_version = Version::from_str(&version)?;
+                        if last_migration_version > cli_version {
+                            anyhow::bail!("Latest migration table version is older than the CLI version. Please run 'qop subsystem sqlite history fix' to rename out-of-order migrations.");
+                        }
                     }
-                }
-            },
-            | None => (),
-        };
-    }
+                },
+                | None => (),
+            };
+        }
 
-    tx.commit().await?;
+        tx.commit().await?;
+    }
 
     Ok((sqlite_config, pool))
 }
@@ -251,7 +252,7 @@ pub(crate) fn get_local_migrations(path: &Path) -> Result<HashSet<String>> {
 
 // High-level command functions
 pub async fn init(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, false).await?;
     let mut tx = pool.begin().await?;
     {
         let mut query = build_table_query("CREATE TABLE IF NOT EXISTS ", &config.table);
@@ -272,7 +273,7 @@ pub async fn new_migration(path: &Path) -> Result<()> {
 }
 
 pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: bool) -> Result<()> {
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
     let effective_timeout = get_effective_timeout(&config, timeout);
@@ -356,7 +357,7 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: 
 }
 
 pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remote: bool, _diff: bool) -> Result<()> {
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     
@@ -425,7 +426,7 @@ pub async fn list(path: &Path) -> Result<()> {
         std::collections::BTreeMap,
     };
     
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let local_migrations = get_local_migrations(path)?;
 
     let mut tx = pool.begin().await?;
@@ -486,7 +487,7 @@ pub async fn list(path: &Path) -> Result<()> {
 pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>) -> Result<()> {
     use std::io::{self, Write};
     
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path
         .parent()
@@ -589,7 +590,7 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>) -> Result<()>
 pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: bool) -> Result<()> {
     use std::io::{self, Write};
     
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path
         .parent()
@@ -688,7 +689,7 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
 pub async fn history_fix(path: &Path) -> Result<()> {
     use chrono::Utc;
     
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
 
@@ -739,7 +740,7 @@ pub async fn history_fix(path: &Path) -> Result<()> {
 }
 
 pub async fn history_sync(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     
     let mut tx = pool.begin().await?;
@@ -787,7 +788,7 @@ pub async fn history_sync(path: &Path) -> Result<()> {
 }
 
 pub async fn diff(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
 

@@ -218,7 +218,7 @@ pub(crate) async fn execute_sql_statements(
     Ok(())
 }
 
-pub(crate) async fn get_db_assets(path: &Path) -> Result<(SubsystemPostgres, Pool<Postgres>)> {
+pub(crate) async fn get_db_assets(path: &Path, check_cli_version: bool) -> Result<(SubsystemPostgres, Pool<Postgres>)> {
     use {sqlx::postgres::PgPoolOptions, crate::config::Subsystem};
     
     let config_content = std::fs::read_to_string(path)
@@ -250,20 +250,21 @@ pub(crate) async fn get_db_assets(path: &Path) -> Result<(SubsystemPostgres, Poo
     let pool = PgPoolOptions::new().max_connections(10).connect(&uri).await?;
     let mut tx = pool.begin().await?;
 
-    let last_migration_version = get_table_version(&mut tx, &subsystem_config.table).await?;
-
-    match last_migration_version {
-        | Some(version) => {
-            let cli_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
-            if cli_version.release() != &[0, 0, 0] {
-                let last_migration_version = Version::from_str(&version)?;
-                if last_migration_version > cli_version {
-                    anyhow::bail!("Latest migration table version is older than the CLI version. Please run 'qop subsystem postgres history fix' to rename out-of-order migrations.");
+    if check_cli_version {
+        let last_migration_version = get_table_version(&mut tx, &subsystem_config.table).await?;
+        match last_migration_version {
+            | Some(version) => {
+                let cli_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
+                if cli_version.release() != &[0, 0, 0] {
+                    let last_migration_version = Version::from_str(&version)?;
+                    if last_migration_version > cli_version {
+                        anyhow::bail!("Latest migration table version is older than the CLI version. Please run 'qop subsystem postgres history fix' to rename out-of-order migrations.");
+                    }
                 }
-            }
-        },
-        | None => (),
-    };
+            },
+            | None => (),
+        };
+    }
 
     tx.commit().await?;
 
@@ -291,7 +292,7 @@ pub(crate) fn get_local_migrations(path: &Path) -> Result<HashSet<String>> {
 
 // High-level command functions
 pub async fn init(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, false).await?;
     let schema = &config.schema;
     let table = &config.table;
     
@@ -312,7 +313,7 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
         std::io::{self, Write},
     };
     
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
     let effective_timeout = get_effective_timeout(&config, timeout);
@@ -483,7 +484,7 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
         std::io::{self, Write},
     };
     
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let schema = &config.schema;
@@ -617,7 +618,7 @@ pub async fn new_migration(path: &Path) -> Result<()> {
 pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>) -> Result<()> {
     use std::io::{self, Write};
     
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path
         .parent()
@@ -735,7 +736,7 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>) -> Result<()>
 pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: bool) -> Result<()> {
     use std::io::{self, Write};
     
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path
         .parent()
@@ -838,7 +839,7 @@ pub async fn list(path: &Path) -> Result<()> {
         std::collections::BTreeMap,
     };
     
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let local_migrations = get_local_migrations(path)?;
     let schema = &config.schema;
     let table = &config.table;
@@ -900,7 +901,7 @@ pub async fn list(path: &Path) -> Result<()> {
 pub async fn history_fix(path: &Path) -> Result<()> {
     use chrono::Utc;
     
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
     let schema = &config.schema;
@@ -953,7 +954,7 @@ pub async fn history_fix(path: &Path) -> Result<()> {
 }
 
 pub async fn history_sync(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let schema = &config.schema;
     let table = &config.table;
@@ -1002,7 +1003,7 @@ pub async fn history_sync(path: &Path) -> Result<()> {
 pub async fn diff(path: &Path) -> Result<()> {
     use crate::migration_diff::{display_migration_diff, parse_migration_operations};
     
-    let (config, pool) = get_db_assets(path).await?;
+    let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
     let schema = &config.schema;
