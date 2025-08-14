@@ -61,19 +61,19 @@ async fn main() -> Result<()> {
             | crate::subsystem::postgres::commands::Command::Init => {
                 crate::subsystem::postgres::migration::init(&path).await
             },
-            | crate::subsystem::postgres::commands::Command::Up { timeout, count, diff } => {
-                crate::subsystem::postgres::migration::up(&path, timeout, count, diff).await
+            | crate::subsystem::postgres::commands::Command::Up { timeout, count, diff, dry } => {
+                crate::subsystem::postgres::migration::up(&path, timeout, count, diff, dry).await
             },
-            | crate::subsystem::postgres::commands::Command::Down { timeout, count, remote, diff } => {
-                crate::subsystem::postgres::migration::down(&path, timeout, count, remote, diff).await
+            | crate::subsystem::postgres::commands::Command::Down { timeout, count, remote, diff, dry } => {
+                crate::subsystem::postgres::migration::down(&path, timeout, count, remote, diff, dry).await
             },
             | crate::subsystem::postgres::commands::Command::Apply(apply_cmd) => {
                 match apply_cmd {
-                    | crate::subsystem::postgres::commands::MigrationApply::Up { id, timeout } => {
-                        crate::subsystem::postgres::migration::apply_up(&path, &id, timeout).await
+                    | crate::subsystem::postgres::commands::MigrationApply::Up { id, timeout, dry } => {
+                        crate::subsystem::postgres::migration::apply_up(&path, &id, timeout, dry).await
                     },
-                    | crate::subsystem::postgres::commands::MigrationApply::Down { id, timeout, remote } => {
-                        crate::subsystem::postgres::migration::apply_down(&path, &id, timeout, remote).await
+                    | crate::subsystem::postgres::commands::MigrationApply::Down { id, timeout, remote, dry } => {
+                        crate::subsystem::postgres::migration::apply_down(&path, &id, timeout, remote, dry).await
                     },
                 }
             },
@@ -101,19 +101,19 @@ async fn main() -> Result<()> {
             | crate::subsystem::sqlite::commands::Command::Init => {
                 crate::subsystem::sqlite::migration::init(&path).await
             },
-            | crate::subsystem::sqlite::commands::Command::Up { timeout, count, diff } => {
-                crate::subsystem::sqlite::migration::up(&path, timeout, count, diff).await
+            | crate::subsystem::sqlite::commands::Command::Up { timeout, count, diff, dry } => {
+                crate::subsystem::sqlite::migration::up(&path, timeout, count, diff, dry).await
             },
-            | crate::subsystem::sqlite::commands::Command::Down { timeout, count, remote, diff } => {
-                crate::subsystem::sqlite::migration::down(&path, timeout, count, remote, diff).await
+            | crate::subsystem::sqlite::commands::Command::Down { timeout, count, remote, diff, dry } => {
+                crate::subsystem::sqlite::migration::down(&path, timeout, count, remote, diff, dry).await
             },
             | crate::subsystem::sqlite::commands::Command::Apply(apply_cmd) => {
                 match apply_cmd {
-                    | crate::subsystem::sqlite::commands::MigrationApply::Up { id, timeout } => {
-                        crate::subsystem::sqlite::migration::apply_up(&path, &id, timeout).await
+                    | crate::subsystem::sqlite::commands::MigrationApply::Up { id, timeout, dry } => {
+                        crate::subsystem::sqlite::migration::apply_up(&path, &id, timeout, dry).await
                     },
-                    | crate::subsystem::sqlite::commands::MigrationApply::Down { id, timeout, remote } => {
-                        crate::subsystem::sqlite::migration::apply_down(&path, &id, timeout, remote).await
+                    | crate::subsystem::sqlite::commands::MigrationApply::Down { id, timeout, remote, dry } => {
+                        crate::subsystem::sqlite::migration::apply_down(&path, &id, timeout, remote, dry).await
                     },
                 }
             },

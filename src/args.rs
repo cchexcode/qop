@@ -149,7 +149,8 @@ impl ClapArgumentLoader {
                                     .about("Runs the migrations.")
                                     .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
                                     .arg(clap::Arg::new("count").short('c').long("count").required(false))
-                                    .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying")),
+                                    .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying"))
+                                    .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing")),
                             )
                             .subcommand(
                                 clap::Command::new("down")
@@ -157,7 +158,8 @@ impl ClapArgumentLoader {
                                     .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
                                     .arg(clap::Arg::new("remote").short('r').long("remote").required(false).num_args(0))
                                     .arg(clap::Arg::new("count").short('c').long("count").required(false))
-                                    .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying")),
+                                    .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying"))
+                                    .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing")),
                             )
                             .subcommand(
                                 clap::Command::new("list")
@@ -188,14 +190,16 @@ impl ClapArgumentLoader {
                                         clap::Command::new("up")
                                             .about("Applies a specific migration.")
                                             .arg(clap::Arg::new("id").help("Migration ID to apply").required(true))
-                                            .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false)),
+                                            .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
+                                            .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing")),
                                     )
                                     .subcommand(
                                         clap::Command::new("down")
                                             .about("Reverts a specific migration.")
                                             .arg(clap::Arg::new("id").help("Migration ID to revert").required(true))
                                             .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
-                                            .arg(clap::Arg::new("remote").short('r').long("remote").required(false).num_args(0)),
+                                            .arg(clap::Arg::new("remote").short('r').long("remote").required(false).num_args(0))
+                                            .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing")),
                                     ),
                             ),
                     )
@@ -218,7 +222,8 @@ impl ClapArgumentLoader {
                                     .about("Runs the migrations.")
                                     .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
                                     .arg(clap::Arg::new("count").short('c').long("count").required(false))
-                                    .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying")),
+                                    .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying"))
+                                    .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing")),
                             )
                             .subcommand(
                                 clap::Command::new("down")
@@ -226,7 +231,8 @@ impl ClapArgumentLoader {
                                     .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
                                     .arg(clap::Arg::new("remote").short('r').long("remote").required(false).num_args(0))
                                     .arg(clap::Arg::new("count").short('c').long("count").required(false))
-                                    .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying")),
+                                    .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying"))
+                                    .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing")),
                             )
                             .subcommand(
                                 clap::Command::new("list")
@@ -257,14 +263,16 @@ impl ClapArgumentLoader {
                                         clap::Command::new("up")
                                             .about("Applies a specific migration.")
                                             .arg(clap::Arg::new("id").help("Migration ID to apply").required(true))
-                                            .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false)),
+                                            .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
+                                            .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing")),
                                     )
                                     .subcommand(
                                         clap::Command::new("down")
                                             .about("Reverts a specific migration.")
                                             .arg(clap::Arg::new("id").help("Migration ID to revert").required(true))
                                             .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
-                                            .arg(clap::Arg::new("remote").short('r').long("remote").required(false).num_args(0)),
+                                            .arg(clap::Arg::new("remote").short('r').long("remote").required(false).num_args(0))
+                                            .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing")),
                                     ),
                             ),
                     )
@@ -310,6 +318,7 @@ impl ClapArgumentLoader {
                         timeout: up_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
                         count: up_subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
                         diff: up_subc.get_flag("diff"),
+                        dry: up_subc.get_flag("dry"),
                     }
                 } else if let Some(down_subc) = postgres_subc.subcommand_matches("down") {
                     crate::subsystem::postgres::commands::Command::Down {
@@ -317,6 +326,7 @@ impl ClapArgumentLoader {
                         count: down_subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
                         remote: down_subc.get_flag("remote"),
                         diff: down_subc.get_flag("diff"),
+                        dry: down_subc.get_flag("dry"),
                     }
                 } else if let Some(_) = postgres_subc.subcommand_matches("list") {
                     crate::subsystem::postgres::commands::Command::List
@@ -336,12 +346,14 @@ impl ClapArgumentLoader {
                         crate::subsystem::postgres::commands::Command::Apply(crate::subsystem::postgres::commands::MigrationApply::Up {
                             id: up_subc.get_one::<String>("id").unwrap().clone(),
                             timeout: up_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
+                            dry: up_subc.get_flag("dry"),
                         })
                     } else if let Some(down_subc) = apply_subc.subcommand_matches("down") {
                         crate::subsystem::postgres::commands::Command::Apply(crate::subsystem::postgres::commands::MigrationApply::Down {
                             id: down_subc.get_one::<String>("id").unwrap().clone(),
                             timeout: down_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
                             remote: down_subc.get_flag("remote"),
+                            dry: down_subc.get_flag("dry"),
                         })
                     } else {
                         unreachable!();
@@ -364,6 +376,7 @@ impl ClapArgumentLoader {
                         timeout: up_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
                         count: up_subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
                         diff: up_subc.get_flag("diff"),
+                        dry: up_subc.get_flag("dry"),
                     }
                 } else if let Some(down_subc) = sqlite_subc.subcommand_matches("down") {
                     crate::subsystem::sqlite::commands::Command::Down {
@@ -371,6 +384,7 @@ impl ClapArgumentLoader {
                         count: down_subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
                         remote: down_subc.get_flag("remote"),
                         diff: down_subc.get_flag("diff"),
+                        dry: down_subc.get_flag("dry"),
                     }
                 } else if let Some(_) = sqlite_subc.subcommand_matches("list") {
                     crate::subsystem::sqlite::commands::Command::List
@@ -390,12 +404,14 @@ impl ClapArgumentLoader {
                         crate::subsystem::sqlite::commands::Command::Apply(crate::subsystem::sqlite::commands::MigrationApply::Up {
                             id: up_subc.get_one::<String>("id").unwrap().clone(),
                             timeout: up_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
+                            dry: up_subc.get_flag("dry"),
                         })
                     } else if let Some(down_subc) = apply_subc.subcommand_matches("down") {
                         crate::subsystem::sqlite::commands::Command::Apply(crate::subsystem::sqlite::commands::MigrationApply::Down {
                             id: down_subc.get_one::<String>("id").unwrap().clone(),
                             timeout: down_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
                             remote: down_subc.get_flag("remote"),
+                            dry: down_subc.get_flag("dry"),
                         })
                     } else {
                         unreachable!();

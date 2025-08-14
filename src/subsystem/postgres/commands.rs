@@ -3,11 +3,13 @@ pub enum MigrationApply {
     Up {
         id: String,
         timeout: Option<u64>,
+        dry: bool,
     },
     Down {
         id: String,
         timeout: Option<u64>,
         remote: bool,
+        dry: bool,
     },
 }
 
@@ -25,12 +27,14 @@ pub enum Command {
         timeout: Option<u64>,
         count: Option<usize>,
         diff: bool,
+        dry: bool,
     },
     Down {
         timeout: Option<u64>,
         count: Option<usize>,
         remote: bool,
         diff: bool,
+        dry: bool,
     },
     Apply(MigrationApply),
     List,

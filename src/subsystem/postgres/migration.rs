@@ -307,7 +307,7 @@ pub async fn init(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: bool) -> Result<()> {
+pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: bool, dry: bool) -> Result<()> {
     use {
         crate::migration_diff::{display_migration_diff, parse_migration_operations},
         std::io::{self, Write},
@@ -421,13 +421,23 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
                 return Ok(());
             }
             
-            println!("\n🚀 Applying migrations...");
+            if dry {
+                println!("\n🧪 Running migrations in dry-run mode...");
+            } else {
+                println!("\n🚀 Applying migrations...");
+            }
+        } else if dry {
+            println!("\n🧪 Running migrations in dry-run mode...");
         }
         
         // Apply each migration in its own transaction
         for migration_id in &migrations_to_apply {
             let migration_path = migration_dir.join(migration_id);
-            println!("⏳ Applying migration: {}", migration_id);
+            if dry {
+                println!("⏳ Testing migration: {}", migration_id);
+            } else {
+                println!("⏳ Applying migration: {}", migration_id);
+            }
             let id = migration_id.as_str();
 
             let up_sql_path = migration_path.join("up.sql");
@@ -465,20 +475,30 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
                 last_migration_id.as_deref(),
             ).await?;
 
-            // Commit this migration's transaction
-            migration_tx.commit().await?;
-            
-            println!("✅ Migration {} applied successfully.", migration_id);
-            last_migration_id = Some(id.to_string());
+            // Commit or rollback based on dry-run mode
+            if dry {
+                migration_tx.rollback().await?;
+                println!("🔄 Migration {} executed and rolled back (dry-run mode).", migration_id);
+            } else {
+                migration_tx.commit().await?;
+                println!("✅ Migration {} applied successfully.", migration_id);
+            }
+            if !dry {
+                last_migration_id = Some(id.to_string());
+            }
         }
 
-        println!("\n🎉 Successfully applied {} migration(s)!", migrations_to_apply.len());
+        if dry {
+            println!("\n🎉 Successfully executed {} migration(s) in dry-run mode! (No changes were committed)", migrations_to_apply.len());
+        } else {
+            println!("\n🎉 Successfully applied {} migration(s)!", migrations_to_apply.len());
+        }
     }
 
     Ok(())
 }
 
-pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remote: bool, diff: bool) -> Result<()> {
+pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remote: bool, diff: bool, dry: bool) -> Result<()> {
     use {
         crate::migration_diff::{display_migration_diff, parse_migration_operations},
         std::io::{self, Write},
@@ -585,10 +605,14 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
             // Remove the migration from the tracking table
             delete_migration_record(&mut *revert_tx, &schema, &table, &id).await?;
 
-            // Commit this migration revert's transaction
-            revert_tx.commit().await?;
-
-            println!("Migration {} reverted.", id);
+            // Commit or rollback based on dry-run mode
+            if dry {
+                revert_tx.rollback().await?;
+                println!("🔄 Migration {} reverted and rolled back (dry-run mode).", id);
+            } else {
+                revert_tx.commit().await?;
+                println!("✅ Migration {} reverted.", id);
+            }
         }
     }
 
@@ -615,7 +639,7 @@ pub async fn new_migration(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>) -> Result<()> {
+pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool) -> Result<()> {
     use std::io::{self, Write};
     
     let (config, pool) = get_db_assets(path, true).await?;
@@ -714,7 +738,12 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>) -> Result<()>
 
     set_timeout_if_needed(&mut *migration_tx, effective_timeout).await?;
 
-    println!("Applying migration: {}", target_migration_id);
+    if dry {
+        println!("Testing migration: {}", target_migration_id);
+    } else {
+        println!("Applying migration: {}", target_migration_id);
+    }
+    
     execute_sql_statements(&mut migration_tx, &up_sql, &target_migration_id).await?;
 
     insert_migration_record(
@@ -727,13 +756,18 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>) -> Result<()>
         last_migration_id.as_deref(),
     ).await?;
 
-    migration_tx.commit().await?;
-    println!("Migration {} applied successfully.", target_migration_id);
+    if dry {
+        migration_tx.rollback().await?;
+        println!("🔄 Migration {} executed and rolled back (dry-run mode).", target_migration_id);
+    } else {
+        migration_tx.commit().await?;
+        println!("✅ Migration {} applied successfully.", target_migration_id);
+    }
 
     Ok(())
 }
 
-pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: bool) -> Result<()> {
+pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: bool, dry: bool) -> Result<()> {
     use std::io::{self, Write};
     
     let (config, pool) = get_db_assets(path, true).await?;
@@ -819,13 +853,23 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
 
     set_timeout_if_needed(&mut *revert_tx, effective_timeout).await?;
 
-    println!("Reverting migration: {}", target_migration_id);
+    if dry {
+        println!("Testing revert migration: {}", target_migration_id);
+    } else {
+        println!("Reverting migration: {}", target_migration_id);
+    }
+    
     execute_sql_statements(&mut revert_tx, &down_sql, &target_migration_id).await?;
 
     delete_migration_record(&mut *revert_tx, &schema, &table, &target_migration_id).await?;
 
-    revert_tx.commit().await?;
-    println!("Migration {} reverted successfully.", target_migration_id);
+    if dry {
+        revert_tx.rollback().await?;
+        println!("🔄 Migration {} reverted and rolled back (dry-run mode).", target_migration_id);
+    } else {
+        revert_tx.commit().await?;
+        println!("✅ Migration {} reverted successfully.", target_migration_id);
+    }
 
     Ok(())
 }
