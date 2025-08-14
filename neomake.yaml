@@ -1,0 +1,187 @@
+version: "0.0"
+env:
+  vars:
+    # SHELLOPTS: "errexit:nounset:pipefail:xtrace"
+    SHELLOPTS: "errexit:nounset:pipefail"
+nodes:
+  "build:docs":
+    description: "Builds the documentation."
+    tasks:
+      - script: |
+          cargo doc --no-deps --document-private-items
+  "build:program":
+    description: "Builds program."
+    env:
+      vars:
+        # unset features are allowed here
+        SHELLOPTS: "errexit:pipefail"
+    matrix:
+      parallel: false
+      dimensions:
+        - - {}
+          - env:
+              vars:
+                RELEASE: --release
+    tasks:
+      - script: |
+          set -e
+          export CARGO_FLAGS=""
+          echo cargo flags: \"$CARGO_FLAGS\"
+          cargo build $CARGO_FLAGS
+  "dependencies:upgrade":
+    description: "Upgrades all dependencies."
+    tasks:
+      - script: |
+          cargo upgrade -i --pinned
+  "test:program":
+    description: "Tests the program."
+    tasks:
+      - script: |
+          cargo test --no-fail-fast
+  "hook:pre-push":
+    description: "GIT pre-push hook."
+    pre:
+      - regex: "^build:"
+      - name: "test:program"
+    tasks: []
+  "release:init":
+    description: "Initializes release folder."
+    pre:
+      - regex: "^build:"
+      - name: "test:program"
+    tasks:
+      - script: |
+          rm -rf ./.release || true
+          mkdir ./.release
+          mkdir ./.release/temp
+          mkdir ./.release/assets
+  "release:asset:generate:compile":
+    description: "Compiles the application."
+    pre:
+      - name: "release:init"
+    matrix:
+      parallel: true
+      dimensions:
+        - - env:
+              vars:
+                TARGET: aarch64-unknown-linux-gnu
+          - env:
+              vars:
+                TARGET: x86_64-unknown-linux-gnu
+          - env:
+              vars:
+                TARGET: aarch64-apple-darwin
+          - env:
+              vars:
+                TARGET: x86_64-unknown-linux-musl
+    tasks:
+      - script: |
+          if [[ "${TARGET}" == *"apple-darwin"* ]]; then
+            rustup target add ${TARGET} || true
+            cargo +stable build --release --target ${TARGET}
+          else
+            export DOCKER_DEFAULT_PLATFORM=linux/amd64
+            cross +stable build --release --target ${TARGET}
+          fi
+          cp ./target/${TARGET}/release/qop ./.release/assets/qop-${TARGET}
+  "release:asset:generate:manpages":
+    description: "Generates manpages."
+    pre:
+      - name: "release:init"
+    tasks:
+      - script: |
+          cargo run -- man -o ./.release/temp/manpages -f manpages
+          cd ./.release/temp/manpages
+          tar -czf ../../assets/docs-manpages.tar.gz .
+  "release:asset:generate:markdown":
+    description: "Generates manpages as markdown."
+    pre:
+      - name: "release:init"
+    tasks:
+      - script: |
+          cargo run -- man -o ./.release/temp/markdown -f markdown
+          cd ./.release/temp/markdown
+          tar -czf ../../assets/docs-markdown.tar.gz .
+  "release:asset:generate:shellcompletion":
+    description: "Generates shell completion files."
+    pre:
+      - name: "release:init"
+    matrix:
+      parallel: true
+      dimensions:
+        - - env:
+              vars:
+                LANGUAGE: bash
+          - env:
+              vars:
+                LANGUAGE: zsh
+          - env:
+              vars:
+                LANGUAGE: fish
+          - env:
+              vars:
+                LANGUAGE: elvish
+          - env:
+              vars:
+                LANGUAGE: powershell
+    tasks:
+      - script: |
+          mkdir -p "./.release/temp/shellcompletion"
+          cargo run -- autocomplete -o ./.release/temp/shellcompletion/${LANGUAGE} -s ${LANGUAGE}
+          cd ./.release/temp/shellcompletion/${LANGUAGE}
+          tar -czf ../../../assets/shell-completion-${LANGUAGE}.tar.gz .
+  "release:asset:sign":
+    description: "Signs all assets."
+    pre:
+      - regex: "^release:asset:generate:"
+    tasks:
+      - script: |
+          for file in ./.release/assets/*; do
+            echo "Signing: ${file}"
+            gpg --batch --yes --local-user "{{ signer }}" --armor --detach-sig --output "./.release/assets/$(basename "${file}").sig" "${file}"
+            echo ""
+          done
+  "release:asset:verify":
+    description: "Verifies all assets with their respective signatures."
+    pre:
+      - name: "release:asset:sign"
+    tasks:
+      - script: |
+          for sig in ./.release/assets/*.sig; do
+            echo "Verifying: ${sig%.sig} with signature ${sig}"
+            gpg --batch --yes --verify "${sig}" "${sig%.sig}"
+            echo ""
+          done
+  "release:github":
+    description: "Releases to GitHub."
+    pre:
+      - name: "release:asset:verify"
+    tasks:
+      - script: |
+          echo "=== === ==="
+          echo "Releasing qop version: {{ version }}"
+          echo "--- --- ---"
+      - script: |
+          if ! [ -z "$(git status --porcelain)" ]; then
+            echo "Dirty repo. Please commit all changes before releasing."
+            exit 1
+          fi
+      - script: |
+          if ! gh auth status >/dev/null 2>&1; then
+              echo "You need to login: gh auth login"
+              exit 1
+          fi
+      - script: |
+          gh release create release/v{{ version }} --latest --target=master --title="Release {{ version }}" ./.release/assets/*
+  "release:cratesio":
+    description: "Releases to crates.io."
+    pre:
+      - regex: "^build:"
+    tasks:
+      - script: |
+          cargo publish --dry-run
+          cp Cargo.toml Cargo.toml.bak
+          sed 's/version = "0.0.0"/version = "{{ version }}"/g' Cargo.toml > Cargo.toml.tmp
+          mv Cargo.toml.tmp Cargo.toml
+          cargo publish --allow-dirty
+          mv Cargo.toml.bak Cargo.toml
