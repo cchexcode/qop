@@ -130,15 +130,29 @@ nodes:
           cargo run -- autocomplete -o ./.release/temp/shellcompletion/${LANGUAGE} -s ${LANGUAGE}
           cd ./.release/temp/shellcompletion/${LANGUAGE}
           tar -czf ../../../assets/shell-completion-${LANGUAGE}.tar.gz .
+  "release:asset:hash":
+    description: "Hashes all assets."
+    pre:
+      - regex: "release:asset:generate:"
+    tasks:
+      - script: |
+          mkdir -p ./.release/temp/hashes
+          cd ./.release/assets
+          for file in ./*; do
+            echo "Hashing: ${file}"
+            sha256sum "${file}" > "./../temp/hashes/$(basename "${file}").sha256"
+            echo ""
+          done
   "release:asset:sign":
     description: "Signs all assets."
     pre:
       - regex: "^release:asset:generate:"
     tasks:
       - script: |
+          mkdir -p ./.release/temp/signatures
           for file in ./.release/assets/*; do
             echo "Signing: ${file}"
-            gpg --batch --yes --local-user "{{ signer }}" --armor --detach-sig --output "./.release/assets/$(basename "${file}").sig" "${file}"
+            gpg --batch --yes --local-user "{{ signer }}" --armor --detach-sig --output "./.release/temp/signatures/$(basename "${file}").asc" "${file}"
             echo ""
           done
   "release:asset:verify":
@@ -147,15 +161,47 @@ nodes:
       - name: "release:asset:sign"
     tasks:
       - script: |
-          for sig in ./.release/assets/*.sig; do
-            echo "Verifying: ${sig%.sig} with signature ${sig}"
-            gpg --batch --yes --verify "${sig}" "${sig%.sig}"
+          for sig in ./.release/temp/signatures/*.asc; do
+            file="./.release/assets/$(basename "${sig%.asc}")"
+            echo "Verifying: ${file} with signature ${sig}"
+            gpg --batch --yes --verify "${sig}" "${file}"
             echo ""
+          done
+  "release:github:readme":
+    description: "Creates a README.md file for the release."
+    pre:
+      - regex: "^release:asset:"
+    tasks:
+      - script: |
+          mkdir -p ./.release/temp/github
+          printf '' > ./.release/temp/github/README.md
+
+          echo "## Assets\n" >> ./.release/temp/github/README.md
+          echo "### Binaries\n" >> ./.release/temp/github/README.md
+          for file in ./.release/assets/*; do
+            echo "- \`$(basename "${file}")\`" >> ./.release/temp/github/README.md
+          done
+          echo "\n### Signatures\n" >> ./.release/temp/github/README.md
+          for file in ./.release/temp/signatures/*; do
+            echo "- \`$(basename "${file}")\`" >> ./.release/temp/github/README.md
+          done
+          echo "\n### Hashes\n" >> ./.release/temp/github/README.md
+          for file in ./.release/temp/hashes/*; do
+            echo "- \`$(basename "${file}")\`" >> ./.release/temp/github/README.md
+          done
+
+          echo "\n## Hashes\n" >> ./.release/temp/github/README.md
+          echo "| Asset | SHA256 Hash |" >> ./.release/temp/github/README.md
+          echo "| --- | --- |" >> ./.release/temp/github/README.md
+          for file in ./.release/temp/hashes/*; do
+            asset=$(basename "${file}" .sha256)
+            hash=$(cut -d' ' -f1 "${file}")
+            echo "| \`${asset}\` | \`${hash}\` |" >> ./.release/temp/github/README.md
           done
   "release:github":
     description: "Releases to GitHub."
     pre:
-      - name: "release:asset:verify"
+      - regex: "^release:github:"
     tasks:
       - script: |
           echo "=== === ==="
@@ -172,7 +218,7 @@ nodes:
               exit 1
           fi
       - script: |
-          gh release create release/v{{ version }} --latest --target=master --title="Release {{ version }}" ./.release/assets/*
+          gh release create release/v{{ version }} --latest --target=master --title="Release {{ version }}" --notes-file ./.release/temp/github/README.md ./.release/assets/* ./.release/temp/hashes/* ./.release/temp/signatures/*
   "release:cratesio":
     description: "Releases to crates.io."
     pre:
