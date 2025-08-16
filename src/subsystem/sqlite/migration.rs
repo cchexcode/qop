@@ -3,7 +3,6 @@ use {
     anyhow::{Context, Result},
     chrono::NaiveDateTime,
     pep440_rs::Version,
-    sqlparser::{dialect::SQLiteDialect, parser::Parser},
     sqlx::{sqlite::SqliteRow, Pool, Sqlite, QueryBuilder, Row},
     std::{
         collections::{HashMap, HashSet},
@@ -33,6 +32,102 @@ where
             .await?;
     }
     Ok(())
+}
+
+fn prompt_for_confirmation_with_diff<F>(
+    message: &str, 
+    yes: bool,
+    diff_fn: F
+) -> Result<bool> 
+where 
+    F: Fn() -> Result<()>
+{
+    if yes {
+        return Ok(true);
+    }
+    
+    use std::io::{self, Write};
+    
+    loop {
+        print!("{} [y/N/d]: ", message);
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+        
+        match input.as_str() {
+            "y" | "yes" => return Ok(true),
+            "n" | "no" | "" => return Ok(false),
+            "d" | "diff" => {
+                println!("\n📋 Migration Details:");
+                diff_fn()?;
+                println!();
+                continue;
+            }
+            _ => {
+                println!("Please enter 'y' (yes), 'n' (no), or 'd' (diff)");
+                continue;
+            }
+        }
+    }
+}
+
+fn display_sql_migration(_migration_id: &str, sql: &str, _direction: &str) {
+    print!("{}", sql);
+}
+
+fn create_bulk_migrations_diff_fn<'a>(
+    migrations: &'a [String],
+    migration_dir: &'a Path
+) -> impl Fn() -> Result<()> + 'a {
+    move || -> Result<()> {
+        for migration_id in migrations {
+            let (up_sql, _down_sql) = crate::helpers::migration::read_migration_files(
+                migration_dir, migration_id
+            )?;
+            
+            display_sql_migration(migration_id, &up_sql, "UP");
+        }
+        Ok(())
+    }
+}
+
+fn create_bulk_reverts_diff_fn<'a>(
+    migrations: &'a [SqliteRow],
+    migration_dir: &'a Path,
+    remote: bool
+) -> impl Fn() -> Result<()> + 'a {
+    move || -> Result<()> {
+        for row in migrations {
+            let id: String = row.get("id");
+            let down_sql: String = if remote {
+                row.get("down")
+            } else {
+                let down_sql_path = migration_dir.join(&id).join("down.sql");
+                std::fs::read_to_string(&down_sql_path).with_context(|| {
+                    format!(
+                        "Failed to read down migration: {}",
+                        down_sql_path.display()
+                    )
+                })?
+            };
+            
+            display_sql_migration(&id, &down_sql, "DOWN");
+        }
+        Ok(())
+    }
+}
+
+fn create_single_migration_diff_fn<'a>(
+    migration_id: &'a str,
+    sql: &'a str,
+    direction: &'a str
+) -> impl Fn() -> Result<()> + 'a {
+    move || -> Result<()> {
+        display_sql_migration(migration_id, sql, direction);
+        Ok(())
+    }
 }
 
 pub(crate) async fn get_applied_migrations(
@@ -138,20 +233,20 @@ pub(crate) async fn get_table_version(
 }
 
 pub(crate) fn split_sql_statements(sql: &str) -> Result<Vec<String>> {
-    let dialect = SQLiteDialect {};
-    
-    // Parse the SQL and expect it to succeed
-    let statements = Parser::parse_sql(&dialect, sql)
-        .with_context(|| "Failed to parse SQL migration - please check your SQL syntax")?;
-    
-    // Reconstruct each statement as a string
-    let mut result = Vec::new();
-    for statement in statements {
-        let statement_str = format!("{};", statement);
-        result.push(statement_str);
-    }
-    
-    Ok(result)
+    let dialect = sqlparser::dialect::SQLiteDialect {};
+    let statements = sqlparser::parser::Parser::parse_sql(&dialect, sql)
+        .map_err(|e| anyhow::anyhow!("Failed to parse SQL: {}", e))?;
+    let rendered: Vec<String> = statements
+        .into_iter()
+        .map(|stmt| {
+            let mut s = stmt.to_string();
+            if !s.trim_end().ends_with(';') {
+                s.push(';');
+            }
+            s
+        })
+        .collect();
+    Ok(rendered)
 }
 
 pub(crate) async fn execute_sql_statements(
@@ -272,7 +367,7 @@ pub async fn new_migration(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: bool, dry: bool) -> Result<()> {
+pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: bool, dry: bool, yes: bool) -> Result<()> {
     let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
@@ -315,6 +410,19 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: 
     if migrations_to_apply.is_empty() {
         println!("All migrations are up to date.");
     } else {
+        // Prompt for confirmation when not in silent mode
+        println!("\n📋 About to apply {} migration(s):", migrations_to_apply.len());
+        for migration_id in &migrations_to_apply {
+            println!("  - {}", migration_id);
+        }
+        
+        let diff_fn = create_bulk_migrations_diff_fn(&migrations_to_apply, migration_dir);
+        
+        if !prompt_for_confirmation_with_diff("❓ Do you want to proceed with applying these migrations?", yes, diff_fn)? {
+            println!("❌ Migration cancelled.");
+            return Ok(());
+        }
+        
         // Apply each migration in its own transaction
         for migration_id in &migrations_to_apply {
             println!("⏳ Applying migration: {}", migration_id);
@@ -364,7 +472,7 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: 
     Ok(())
 }
 
-pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remote: bool, _diff: bool, dry: bool) -> Result<()> {
+pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remote: bool, _diff: bool, dry: bool, yes: bool) -> Result<()> {
     let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let effective_timeout = get_effective_timeout(&config, timeout);
@@ -387,6 +495,20 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
     if migrations_to_revert.is_empty() {
         println!("No migrations to revert.");
     } else {
+        // Prompt for confirmation when not in silent mode
+        println!("\n📋 About to revert {} migration(s):", migrations_to_revert.len());
+        for row in &migrations_to_revert {
+            let id: String = row.get("id");
+            println!("  - {}", id);
+        }
+        
+        let diff_fn = create_bulk_reverts_diff_fn(&migrations_to_revert, migration_dir, remote);
+        
+        if !prompt_for_confirmation_with_diff("❓ Do you want to proceed with reverting these migrations?", yes, diff_fn)? {
+            println!("❌ Revert cancelled.");
+            return Ok(());
+        }
+        
         // Revert each migration in its own transaction
         for row in migrations_to_revert {
             let id: String = row.get("id");
@@ -496,7 +618,7 @@ pub async fn list(path: &Path) -> Result<()> {
 }
 
 // Placeholder implementations for remaining functions
-pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool) -> Result<()> {
+pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, yes: bool) -> Result<()> {
     use std::io::{self, Write};
     
     let (config, pool) = get_db_assets(path, true).await?;
@@ -566,10 +688,19 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool) ->
         }
     }
 
-    // Apply the migration
+    // Confirm migration application  
     let (up_sql, down_sql) = crate::helpers::migration::read_migration_files(
         migration_dir, &target_migration_id
     )?;
+    
+    let diff_fn = create_single_migration_diff_fn(&target_migration_id, &up_sql, "UP");
+    
+    if !prompt_for_confirmation_with_diff(&format!("❓ Do you want to apply migration '{}'?", target_migration_id), yes, diff_fn)? {
+        println!("❌ Operation cancelled.");
+        return Ok(());
+    }
+
+    // Apply the migration
 
     // Get the latest migration for the pre field
     let mut tx = pool.begin().await?;
@@ -609,7 +740,7 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool) ->
     Ok(())
 }
 
-pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: bool, dry: bool) -> Result<()> {
+pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: bool, dry: bool, yes: bool) -> Result<()> {
     use std::io::{self, Write};
     
     let (config, pool) = get_db_assets(path, true).await?;
@@ -691,6 +822,14 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
             )
         })?
     };
+
+    // Confirm migration revert
+    let diff_fn = create_single_migration_diff_fn(&target_migration_id, &down_sql, "DOWN");
+    
+    if !prompt_for_confirmation_with_diff(&format!("❓ Do you want to revert migration '{}'?", target_migration_id), yes, diff_fn)? {
+        println!("❌ Operation cancelled.");
+        return Ok(());
+    }
 
     // Execute the down migration
     let mut revert_tx = pool.begin().await?;
@@ -836,42 +975,14 @@ pub async fn diff(path: &Path) -> Result<()> {
     pending_migrations.sort();
 
     if pending_migrations.is_empty() {
-        println!("No pending migrations to apply.");
+        println!("All migrations are up to date.");
     } else {
-        println!("Pending migrations that would be applied:");
-        println!();
-
         for migration_id in &pending_migrations {
-            println!("Migration: {}", migration_id);
-            
             let (up_sql, _down_sql) = crate::helpers::migration::read_migration_files(
                 migration_dir, migration_id
             )?;
 
-            println!("  Up SQL:");
-            for (i, line) in up_sql.lines().enumerate() {
-                println!("    {:3}: {}", i + 1, line);
-            }
-            println!();
-        }
-
-        println!("Total {} migration(s) would be applied.", pending_migrations.len());
-        
-        // Check for non-linear history warnings
-        let out_of_order_migrations = crate::helpers::migration::check_non_linear_history(
-            &applied_migrations, 
-            &pending_migrations
-        );
-        if !out_of_order_migrations.is_empty() {
-            println!();
-            println!("⚠️  Warning: Non-linear history detected!");
-            println!("The following migrations would create non-linear history:");
-            for migration_id in &out_of_order_migrations {
-                println!("  - {}", migration_id);
-            }
-            let max_applied = applied_migrations.iter().max().cloned().unwrap_or_default();
-            println!("Latest applied migration: {}", max_applied);
-            println!("This could cause issues with database schema consistency.");
+            print!("{}", up_sql);
         }
     }
 

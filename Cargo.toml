@@ -40,8 +40,8 @@ toml = "0.9.5"
 sqlx = { version = "0.8.6", features = ["tls-rustls", "runtime-tokio", "postgres", "sqlite", "chrono"]}
 comfy-table = "7.1.4"
 path-clean = "1.0.1"
-sqlparser = "0.58"
 pep440_rs = "0.7"
+sqlparser = "0.58"
 
 [dev-dependencies]
 hoox = "0.3.0"

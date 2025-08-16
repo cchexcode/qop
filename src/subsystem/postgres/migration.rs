@@ -3,7 +3,6 @@ use {
     anyhow::{Context, Result},
     chrono::NaiveDateTime,
     pep440_rs::Version,
-    sqlparser::{dialect::PostgreSqlDialect, parser::Parser},
     sqlx::{postgres::PgRow, Pool, Postgres, QueryBuilder, Row},
     std::{
         collections::{HashMap, HashSet},
@@ -33,6 +32,113 @@ where
             .await?;
     }
     Ok(())
+}
+
+fn prompt_for_confirmation_with_diff<F>(
+    message: &str, 
+    yes: bool,
+    diff_fn: F
+) -> Result<bool> 
+where 
+    F: Fn() -> Result<()>
+{
+    if yes {
+        return Ok(true);
+    }
+    
+    use std::io::{self, Write};
+    
+    loop {
+        print!("{} [y/N/d]: ", message);
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+        
+        match input.as_str() {
+            "y" | "yes" => return Ok(true),
+            "n" | "no" | "" => return Ok(false),
+            "d" | "diff" => {
+                println!("\n📋 Migration Details:");
+                diff_fn()?;
+                println!();
+                continue;
+            }
+            _ => {
+                println!("Please enter 'y' (yes), 'n' (no), or 'd' (diff)");
+                continue;
+            }
+        }
+    }
+}
+
+fn display_migration_diff_from_sql(_migration_id: &str, sql: &str, _direction: &str) -> Result<()> {
+    print!("{}", sql);
+    Ok(())
+}
+
+fn create_bulk_migrations_diff_fn<'a>(
+    migrations: &'a [String],
+    migration_dir: &'a Path,
+    direction: &'a str
+) -> impl Fn() -> Result<()> + 'a {
+    move || -> Result<()> {
+        for migration_id in migrations {
+            let sql = if direction == "UP" {
+                let migration_path = migration_dir.join(migration_id);
+                let up_sql_path = migration_path.join("up.sql");
+                std::fs::read_to_string(&up_sql_path).with_context(
+                    || format!("Failed to read up migration: {}", up_sql_path.display()),
+                )?
+            } else {
+                let migration_path = migration_dir.join(migration_id);
+                let down_sql_path = migration_path.join("down.sql");
+                std::fs::read_to_string(&down_sql_path).with_context(
+                    || format!("Failed to read down migration: {}", down_sql_path.display()),
+                )?
+            };
+            
+            display_migration_diff_from_sql(migration_id, &sql, direction)?;
+        }
+        Ok(())
+    }
+}
+
+fn create_bulk_reverts_diff_fn<'a>(
+    migrations: &'a [sqlx::postgres::PgRow],
+    migration_dir: &'a Path,
+    remote: bool
+) -> impl Fn() -> Result<()> + 'a {
+    move || -> Result<()> {
+        for row in migrations {
+            let id: String = row.get("id");
+            let down_sql: String = if remote {
+                row.get("down")
+            } else {
+                let down_sql_path = migration_dir.join(&id).join("down.sql");
+                std::fs::read_to_string(&down_sql_path).with_context(|| {
+                    format!(
+                        "Failed to read down migration: {}",
+                        down_sql_path.display()
+                    )
+                })?
+            };
+            
+            display_migration_diff_from_sql(&id, &down_sql, "DOWN")?;
+        }
+        Ok(())
+    }
+}
+
+fn create_single_migration_diff_fn<'a>(
+    migration_id: &'a str,
+    sql: &'a str,
+    direction: &'a str
+) -> impl Fn() -> Result<()> + 'a {
+    move || -> Result<()> {
+        display_migration_diff_from_sql(migration_id, sql, direction)
+    }
 }
 
 pub(crate) async fn get_applied_migrations(
@@ -172,20 +278,20 @@ pub(crate) async fn get_table_version(
 }
 
 pub(crate) fn split_sql_statements(sql: &str) -> Result<Vec<String>> {
-    let dialect = PostgreSqlDialect {};
-    
-    // Parse the SQL and expect it to succeed
-    let statements = Parser::parse_sql(&dialect, sql)
-        .with_context(|| "Failed to parse SQL migration - please check your SQL syntax")?;
-    
-    // Reconstruct each statement as a string
-    let mut result = Vec::new();
-    for statement in statements {
-        let statement_str = format!("{};", statement);
-        result.push(statement_str);
-    }
-    
-    Ok(result)
+    let dialect = sqlparser::dialect::PostgreSqlDialect {};
+    let statements = sqlparser::parser::Parser::parse_sql(&dialect, sql)
+        .map_err(|e| anyhow::anyhow!("Failed to parse SQL: {}", e))?;
+    let rendered: Vec<String> = statements
+        .into_iter()
+        .map(|stmt| {
+            let mut s = stmt.to_string();
+            if !s.trim_end().ends_with(';') {
+                s.push(';');
+            }
+            s
+        })
+        .collect();
+    Ok(rendered)
 }
 
 pub(crate) async fn execute_sql_statements(
@@ -307,11 +413,8 @@ pub async fn init(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: bool, dry: bool) -> Result<()> {
-    use {
-        crate::migration_diff::{display_migration_diff, parse_migration_operations},
-        std::io::{self, Write},
-    };
+pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: bool, dry: bool, yes: bool) -> Result<()> {
+    use std::io::{self, Write};
     
     let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
@@ -380,10 +483,6 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
     } else {
         // Show diff preview if --diff flag is specified
         if diff {
-            let mut all_operations = Vec::new();
-            
-            println!("\n🔍 Analyzing {} migration(s) to be applied...", migrations_to_apply.len());
-            
             for migration_id in &migrations_to_apply {
                 let migration_path = migration_dir.join(migration_id);
                 let up_sql_path = migration_path.join("up.sql");
@@ -392,21 +491,8 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
                     || format!("Failed to read up migration: {}", up_sql_path.display()),
                 )?;
                 
-                match parse_migration_operations(&up_sql) {
-                    Ok(operations) => {
-                        display_migration_diff(migration_id, &operations);
-                        all_operations.extend(operations);
-                    }
-                    Err(e) => {
-                        println!("\n⚠️  Could not parse migration {}: {}", migration_id, e);
-                        println!("📄 Raw SQL content will be executed as-is.");
-                    }
-                }
+                print!("{}", up_sql);
             }
-            
-            println!("\n📊 Migration Summary:");
-            println!("  • {} migration(s) to apply", migrations_to_apply.len());
-            println!("  • {} total operation(s) detected", all_operations.len());
             
             // Ask for confirmation when showing diff
             print!("\n❓ Do you want to apply these migrations? [y/N]: ");
@@ -428,6 +514,21 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
             }
         } else if dry {
             println!("\n🧪 Running migrations in dry-run mode...");
+        } else {
+            // Prompt for confirmation when not using diff and not in silent mode
+            println!("\n📋 About to apply {} migration(s):", migrations_to_apply.len());
+            for migration_id in &migrations_to_apply {
+                println!("  - {}", migration_id);
+            }
+            
+            let diff_fn = create_bulk_migrations_diff_fn(&migrations_to_apply, migration_dir, "UP");
+            
+            if !prompt_for_confirmation_with_diff("❓ Do you want to proceed with applying these migrations?", yes, diff_fn)? {
+                println!("❌ Migration cancelled.");
+                return Ok(());
+            }
+            
+            println!("\n🚀 Applying migrations...");
         }
         
         // Apply each migration in its own transaction
@@ -498,11 +599,8 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
     Ok(())
 }
 
-pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remote: bool, diff: bool, dry: bool) -> Result<()> {
-    use {
-        crate::migration_diff::{display_migration_diff, parse_migration_operations},
-        std::io::{self, Write},
-    };
+pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remote: bool, diff: bool, dry: bool, yes: bool) -> Result<()> {
+    use std::io::{self, Write};
     
     let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
@@ -530,8 +628,6 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
     } else {
         // Show diff preview if --diff flag is specified
         if diff {
-            println!("\n🔍 Analyzing {} migration(s) to be reverted...", migrations_to_revert.len());
-            
             for row in &migrations_to_revert {
                 let id: String = row.get("id");
                 let down_sql: String = if remote {
@@ -546,20 +642,8 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
                     })?
                 };
                 
-                match parse_migration_operations(&down_sql) {
-                    Ok(operations) => {
-                        println!("\n📉 Migration {} (REVERT):", id);
-                        display_migration_diff(&id, &operations);
-                    }
-                    Err(e) => {
-                        println!("\n⚠️  Could not parse migration {}: {}", id, e);
-                        println!("📄 Raw SQL content will be executed as-is.");
-                    }
-                }
+                print!("{}", down_sql);
             }
-            
-            println!("\n📊 Revert Summary:");
-            println!("  • {} migration(s) to revert", migrations_to_revert.len());
             
             // Ask for confirmation when showing diff
             print!("\n❓ Do you want to revert these migrations? [y/N]: ");
@@ -570,6 +654,22 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
             let input = input.trim().to_lowercase();
             
             if input != "y" && input != "yes" {
+                println!("❌ Revert cancelled.");
+                return Ok(());
+            }
+            
+            println!("\n🔄 Reverting migrations...");
+        } else {
+            // Prompt for confirmation when not using diff and not in silent mode
+            println!("\n📋 About to revert {} migration(s):", migrations_to_revert.len());
+            for row in &migrations_to_revert {
+                let id: String = row.get("id");
+                println!("  - {}", id);
+            }
+            
+            let diff_fn = create_bulk_reverts_diff_fn(&migrations_to_revert, migration_dir, remote);
+            
+            if !prompt_for_confirmation_with_diff("❓ Do you want to proceed with reverting these migrations?", yes, diff_fn)? {
                 println!("❌ Revert cancelled.");
                 return Ok(());
             }
@@ -639,7 +739,7 @@ pub async fn new_migration(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool) -> Result<()> {
+pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, yes: bool) -> Result<()> {
     use std::io::{self, Write};
     
     let (config, pool) = get_db_assets(path, true).await?;
@@ -719,6 +819,18 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool) ->
     let up_sql = std::fs::read_to_string(&up_sql_path).with_context(
         || format!("Failed to read up migration: {}", up_sql_path.display()),
     )?;
+    // Confirm migration application
+    let diff_fn = create_single_migration_diff_fn(&target_migration_id, &up_sql, "UP");
+    
+    if !prompt_for_confirmation_with_diff(&format!("❓ Do you want to apply migration '{}'?", target_migration_id), yes, diff_fn)? {
+        println!("❌ Operation cancelled.");
+        return Ok(());
+    }
+
+    // Continue with reading migration files
+    let up_sql = std::fs::read_to_string(&up_sql_path).with_context(
+        || format!("Failed to read up migration: {}", up_sql_path.display()),
+    )?;
     let down_sql = std::fs::read_to_string(&down_sql_path).with_context(
         || {
             format!(
@@ -767,7 +879,7 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool) ->
     Ok(())
 }
 
-pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: bool, dry: bool) -> Result<()> {
+pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: bool, dry: bool, yes: bool) -> Result<()> {
     use std::io::{self, Write};
     
     let (config, pool) = get_db_assets(path, true).await?;
@@ -847,6 +959,14 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
             )
         })?
     };
+
+    // Confirm migration revert
+    let diff_fn = create_single_migration_diff_fn(&target_migration_id, &down_sql, "DOWN");
+    
+    if !prompt_for_confirmation_with_diff(&format!("❓ Do you want to revert migration '{}'?", target_migration_id), yes, diff_fn)? {
+        println!("❌ Operation cancelled.");
+        return Ok(());
+    }
 
     // Execute the down migration
     let mut revert_tx = pool.begin().await?;
@@ -1045,7 +1165,6 @@ pub async fn history_sync(path: &Path) -> Result<()> {
 }
 
 pub async fn diff(path: &Path) -> Result<()> {
-    use crate::migration_diff::{display_migration_diff, parse_migration_operations};
     
     let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
@@ -1067,10 +1186,6 @@ pub async fn diff(path: &Path) -> Result<()> {
     if migrations_to_apply.is_empty() {
         println!("All migrations are up to date.");
     } else {
-        println!("\n🔍 Analyzing {} migration(s) that would be applied...", migrations_to_apply.len());
-        
-        let mut all_operations = Vec::new();
-        
         for migration_id in &migrations_to_apply {
             let migration_path = migration_dir.join(migration_id);
             let up_sql_path = migration_path.join("up.sql");
@@ -1079,21 +1194,8 @@ pub async fn diff(path: &Path) -> Result<()> {
                 || format!("Failed to read up migration: {}", up_sql_path.display()),
             )?;
             
-            match parse_migration_operations(&up_sql) {
-                Ok(operations) => {
-                    display_migration_diff(migration_id, &operations);
-                    all_operations.extend(operations);
-                }
-                Err(e) => {
-                    println!("\n⚠️  Could not parse migration {}: {}", migration_id, e);
-                    println!("📄 Raw SQL content will be executed as-is.");
-                }
-            }
+            print!("{}", up_sql);
         }
-        
-        println!("\n📊 Migration Summary:");
-        println!("  • {} migration(s) to apply", migrations_to_apply.len());
-        println!("  • {} total operation(s) detected", all_operations.len());
     }
 
     Ok(())
