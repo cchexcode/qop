@@ -277,48 +277,21 @@ pub(crate) async fn get_table_version(
         .map(|row| row.get("version")))
 }
 
-pub(crate) fn split_sql_statements(sql: &str) -> Result<Vec<String>> {
-    let dialect = sqlparser::dialect::PostgreSqlDialect {};
-    let statements = sqlparser::parser::Parser::parse_sql(&dialect, sql)
-        .map_err(|e| anyhow::anyhow!("Failed to parse SQL: {}", e))?;
-    let rendered: Vec<String> = statements
-        .into_iter()
-        .map(|stmt| {
-            let mut s = stmt.to_string();
-            if !s.trim_end().ends_with(';') {
-                s.push(';');
-            }
-            s
-        })
-        .collect();
-    Ok(rendered)
-}
-
 pub(crate) async fn execute_sql_statements(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     sql: &str,
     migration_id: &str,
 ) -> Result<()> {
-    let statements = split_sql_statements(sql)?;
-    
-    if statements.is_empty() {
-        return Ok(());
-    }
-
-    for (i, statement) in statements.iter().enumerate() {
-        match sqlx::query(statement).execute(&mut **tx).await {
-            Ok(_) => {
-                // Statement executed successfully
-            }
-            Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "Failed to execute statement {} in migration {}: {}\nStatement: {}",
-                    i + 1,
-                    migration_id,
-                    e,
-                    statement
-                ));
-            }
+    match sqlx::raw_sql(sql).execute(&mut **tx).await {
+        Ok(_) => {
+            // Statement executed successfully
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "Failed to execute statements in migration {}: {}",
+                migration_id,
+                e,
+            ));
         }
     }
     Ok(())

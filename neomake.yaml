@@ -218,6 +218,8 @@ nodes:
               exit 1
           fi
       - script: |
+          git tag release/v{{ version }}
+          git push
           gh release create release/v{{ version }} --latest --target=master --title="Release {{ version }}" --notes-file ./.release/temp/github/README.md ./.release/assets/* ./.release/temp/hashes/* ./.release/temp/signatures/*
   "release:cratesio":
     description: "Releases to crates.io."
