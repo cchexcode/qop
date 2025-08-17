@@ -23,7 +23,7 @@ pub enum HistoryCommand {
 
 #[derive(Debug)]
 pub enum ConfigCommand {
-    Init,
+    Init { connection: String },
 }
 
 #[derive(Debug, Clone, Copy)]

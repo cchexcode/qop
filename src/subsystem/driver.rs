@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, Context};
 use std::path::PathBuf;
 use crate::core::service::MigrationService;
 
@@ -131,11 +131,20 @@ pub(crate) async fn dispatch(subsystem: crate::args::Subsystem) -> anyhow::Resul
                     driver.list(path, out).await
                 }
                 crate::subsystem::postgres::commands::Command::Config(cfg) => match cfg {
-                    super::postgres::commands::ConfigCommand::Init => {
-                        let cfg = super::postgres::build_sample();
+                    super::postgres::commands::ConfigCommand::Init { connection } => {
+                        let cfg = super::postgres::build_sample(&connection);
                         let toml = toml::to_string(&cfg)?;
-                        crate::config_init::write_config(&path, &toml)?;
-                        println!("Wrote sample Postgres config to {}", path.display());
+                        {
+                            if let Some(parent) = path.parent() {
+                                if !parent.as_os_str().is_empty() {
+                                    std::fs::create_dir_all(parent)
+                                        .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+                                }
+                            }
+                            std::fs::write(&path, &toml)
+                                .with_context(|| format!("Failed to write config file to: {}", path.display()))?;
+                        }
+                        println!("Bootstrapped postgres config to {}", path.display());
                         Ok(())
                     }
                 },
@@ -167,11 +176,20 @@ pub(crate) async fn dispatch(subsystem: crate::args::Subsystem) -> anyhow::Resul
                     driver.list(path, out).await
                 }
                 crate::subsystem::sqlite::commands::Command::Config(cfg) => match cfg {
-                    super::sqlite::commands::ConfigCommand::Init => {
-                        let cfg = super::sqlite::build_sample(&path);
+                    super::sqlite::commands::ConfigCommand::Init { path: db_path } => {
+                        let cfg = super::sqlite::build_sample_with_db_path(std::path::Path::new(&db_path));
                         let toml = toml::to_string(&cfg)?;
-                        crate::config_init::write_config(&path, &toml)?;
-                        println!("Wrote sample SQLite config to {}", path.display());
+                        {
+                            if let Some(parent) = path.parent() {
+                                if !parent.as_os_str().is_empty() {
+                                    std::fs::create_dir_all(parent)
+                                        .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+                                }
+                            }
+                            std::fs::write(&path, &toml)
+                                .with_context(|| format!("Failed to write config file to: {}", path.display()))?;
+                        }
+                        println!("Bootstrapped sqlite config to {}", path.display());
                         Ok(())
                     }
                 },

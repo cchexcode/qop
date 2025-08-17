@@ -10,7 +10,7 @@ use {
 };
 
 pub struct SqliteRepo {
-    pub config: crate::config::SubsystemSqlite,
+    pub config: crate::subsystem::sqlite::config::SubsystemSqlite,
     pub pool: Pool<Sqlite>,
     pub path: std::path::PathBuf,
 }

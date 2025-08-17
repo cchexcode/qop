@@ -8,7 +8,7 @@ use {
 };
 
 pub struct PostgresRepo {
-    pub config: crate::config::SubsystemPostgres,
+    pub config: crate::subsystem::postgres::config::SubsystemPostgres,
     pub pool: Pool<Postgres>,
     pub path: std::path::PathBuf,
 }

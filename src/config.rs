@@ -54,24 +54,7 @@ pub enum DataSource<T: Serialize + DeserializeOwned> {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct SubsystemPostgres {
-    pub connection: DataSource<String>,
-    pub timeout: Option<u64>,
-    pub schema: String,
-    pub table: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct SubsystemSqlite {
-    pub connection: DataSource<String>,
-    pub timeout: Option<u64>,
-    pub table: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum Subsystem {
-    Postgres(SubsystemPostgres),
-    Sqlite(SubsystemSqlite),
+    Postgres(crate::subsystem::postgres::config::SubsystemPostgres),
+    Sqlite(crate::subsystem::sqlite::config::SubsystemSqlite),
 }

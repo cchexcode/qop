@@ -6,6 +6,9 @@ use {
         path::Path,
     },
 };
+use std::io::{self, Write};
+use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, ContentArrangement, Table, CellAlignment};
+use std::collections::BTreeMap;
 
 /// Normalize migration ID to include "id=" prefix if not present
 pub fn normalize_migration_id(id: &str) -> String {
@@ -98,7 +101,6 @@ pub fn check_non_linear_history(
 
 /// Display non-linear history warning and get user confirmation
 pub fn handle_non_linear_warning(out_of_order_migrations: &[String], max_applied: &str) -> Result<bool> {
-    use std::io::{self, Write};
     if out_of_order_migrations.is_empty() {
         return Ok(true);
     }
@@ -136,7 +138,6 @@ where
     F: Fn() -> Result<()>,
 {
     if yes { return Ok(true); }
-    use std::io::{self, Write};
     loop {
         print!("{} [y/N/d]: ", message);
         io::stdout().flush()?;
@@ -170,9 +171,6 @@ pub fn render_migration_table(
     local_ids: &std::collections::HashSet<String>,
     remote_history: &[(String, NaiveDateTime)],
 ) -> Result<()> {
-    use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, ContentArrangement, Table, CellAlignment};
-    use std::collections::BTreeMap;
-
     let mut all: BTreeMap<String, (Option<NaiveDateTime>, bool)> = BTreeMap::new();
     for id in local_ids {
         let entry = all.entry(id.clone()).or_default();

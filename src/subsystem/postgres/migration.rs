@@ -1,7 +1,8 @@
 use {
-    crate::config::{SubsystemPostgres, Config, DataSource, WithVersion},
+    crate::config::{Config, DataSource, WithVersion},
+    crate::subsystem::postgres::config::SubsystemPostgres,
     anyhow::{Context, Result},
-    chrono::NaiveDateTime,
+    chrono::{NaiveDateTime, Utc},
     pep440_rs::Version,
     sqlx::{postgres::PgRow, Pool, Postgres, QueryBuilder, Row},
     sqlx::postgres::PgPoolOptions,
@@ -12,6 +13,7 @@ use {
     },
 };
 use crate::config::Subsystem as PostgresSubsystemTag;
+use std::io::{self, Write};
 
 // Database utility functions
 pub(crate) fn get_effective_timeout(config: &SubsystemPostgres, provided_timeout: Option<u64>) -> Option<u64> {
@@ -327,8 +329,6 @@ pub async fn init(path: &Path) -> Result<()> {
 }
 
 pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: bool, dry: bool, yes: bool) -> Result<()> {
-    use std::io::{self, Write};
-    
     let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
@@ -513,8 +513,6 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
 }
 
 pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remote: bool, diff: bool, dry: bool, yes: bool) -> Result<()> {
-    use std::io::{self, Write};
-    
     let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let effective_timeout = get_effective_timeout(&config, timeout);
@@ -633,8 +631,6 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
 }
 
 pub async fn new_migration(path: &Path) -> Result<()> {
-    use chrono::Utc;
-    
     let id = Utc::now().timestamp_millis().to_string();
     let migration_path = path.parent().unwrap();
     let migration_id_path = migration_path.join(format!("id={}", id));
@@ -653,8 +649,6 @@ pub async fn new_migration(path: &Path) -> Result<()> {
 }
 
 pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, yes: bool) -> Result<()> {
-    use std::io::{self, Write};
-    
     let (config, pool) = get_db_assets(path, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path
@@ -793,8 +787,6 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
 }
 
 pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: bool, dry: bool, yes: bool) -> Result<()> {
-    use std::io::{self, Write};
-    
     let (config, pool) = get_db_assets(path, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path
@@ -927,8 +919,6 @@ pub async fn list(path: &Path) -> Result<()> {
 }
 
 pub async fn history_fix(path: &Path) -> Result<()> {
-    use chrono::Utc;
-    
     let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;

@@ -1,7 +1,8 @@
 use {
-    crate::config::{SubsystemSqlite, DataSource, WithVersion, Config, Subsystem as SqliteSubsystemTag},
+    crate::config::{DataSource, WithVersion, Config, Subsystem as SqliteSubsystemTag},
+    crate::subsystem::sqlite::config::SubsystemSqlite,
     anyhow::{Context, Result},
-    chrono::NaiveDateTime,
+    chrono::{NaiveDateTime, Utc},
     pep440_rs::Version,
     sqlx::{sqlite::SqliteRow, Pool, Sqlite, QueryBuilder, Row},
     sqlx::sqlite::SqlitePoolOptions,
@@ -11,6 +12,9 @@ use {
         str::FromStr,
     },
 };
+
+use std::io::{self, Write};
+use crate::core::migration::create_migration_directory;
 
 // Database utility functions
 pub(crate) fn get_effective_timeout(config: &SubsystemSqlite, provided_timeout: Option<u64>) -> Option<u64> {
@@ -297,8 +301,6 @@ pub async fn init(path: &Path) -> Result<()> {
 }
 
 pub async fn new_migration(path: &Path) -> Result<()> {
-    use crate::core::migration::create_migration_directory;
-    
     let migration_id_path = create_migration_directory(path)?;
     println!("Created new migration: {}", migration_id_path.display());
     Ok(())
@@ -519,8 +521,6 @@ pub async fn list(path: &Path) -> Result<()> {
 
 // Placeholder implementations for remaining functions
 pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, yes: bool) -> Result<()> {
-    use std::io::{self, Write};
-    
     let (config, pool) = get_db_assets(path, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path
@@ -641,8 +641,6 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
 }
 
 pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: bool, dry: bool, yes: bool) -> Result<()> {
-    use std::io::{self, Write};
-    
     let (config, pool) = get_db_assets(path, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path
@@ -758,8 +756,6 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
 }
 
 pub async fn history_fix(path: &Path) -> Result<()> {
-    use chrono::Utc;
-    
     let (config, pool) = get_db_assets(path, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
