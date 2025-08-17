@@ -43,11 +43,6 @@ pub struct Config {
     pub subsystem: Subsystem,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct PostgresMigrations {
-}
-
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

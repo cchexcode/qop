@@ -1,6 +1,6 @@
 # qop - A simple database migration tool
 
-`qop` is a command-line tool for managing database migrations. It's designed to be simple, straightforward, and easy to use.
+`qop` is a command-line tool for managing database migrations for PostgreSQL and SQLite. It's designed to be simple, straightforward, and easy to use.
 
 ## Features
 
@@ -8,6 +8,7 @@
 *   Simple migration file format (`up.sql`, `down.sql`)
 *   Timestamp-based migration IDs
 *   Command-line interface for managing migrations
+*   No interactive UI; all confirmations happen via CLI prompts or can be bypassed with `--yes`
 
 ## Installation
 
@@ -23,10 +24,15 @@ cargo install --path .
     ```
     This will create a `qop.toml` file in your current directory.
 
-2.  **Initialize the database:**
+2.  **Initialize the database and configuration:**
     ```bash
-    qop subsystem postgres init    # For PostgreSQL
-    qop subsystem sqlite init      # For SQLite
+    # Create a sample config file
+    qop subsystem postgres config init -p qop.toml
+    qop subsystem sqlite   config init -p qop.toml
+
+    # Initialize the migration table
+    qop subsystem postgres init -p qop.toml
+    qop subsystem sqlite   init -p qop.toml
     ```
 
 3.  **Create your first migration:**
@@ -54,7 +60,7 @@ version = ">=0.1.0"
 [subsystem.postgres]
 connection = { static = "postgresql://postgres:password@localhost:5432/postgres" }
 schema = "public"
-table = "migrations"
+table = "__qop"
 timeout = 30
 ```
 
@@ -66,7 +72,7 @@ version = ">=0.1.0"
 [subsystem.postgres]
 connection = { from_env = "DATABASE_URL" }
 schema = "public"
-table = "migrations"
+table = "__qop"
 timeout = 30
 ```
 

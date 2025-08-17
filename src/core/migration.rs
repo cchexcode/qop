@@ -1,6 +1,6 @@
 use {
     anyhow::{Context, Result},
-    chrono::Utc,
+    chrono::{Utc, Local, TimeZone, NaiveDateTime},
     std::{
         collections::HashSet,
         path::Path,
@@ -99,29 +99,24 @@ pub fn check_non_linear_history(
 /// Display non-linear history warning and get user confirmation
 pub fn handle_non_linear_warning(out_of_order_migrations: &[String], max_applied: &str) -> Result<bool> {
     use std::io::{self, Write};
-    
     if out_of_order_migrations.is_empty() {
         return Ok(true);
     }
-    
     println!("⚠️  Non-linear history detected!");
     println!("The following migrations would create a non-linear history:");
     for migration in out_of_order_migrations {
         println!("  - {}", migration);
     }
     println!("Latest applied migration: {}", max_applied);
-    println!();
+    println!("");
     println!("This could cause issues with database schema consistency.");
     println!("Alternatively, you can run history fix to rename out-of-order migrations.");
-    
     print!("Do you want to continue? [y/N]: ");
     io::stdout().flush()?;
-    
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     let input = input.trim().to_lowercase();
-    
-    Ok(input == "y" || input == "yes")
+    Ok(matches!(input.as_str(), "y" | "yes"))
 }
 
 /// Print migration application results
@@ -130,3 +125,90 @@ pub fn print_migration_results(applied_count: usize, action: &str) {
         println!("\n🎉 Successfully {} {} migration(s)!", action, applied_count);
     }
 }
+
+/// Prompt the user for confirmation with an optional diff callback.
+pub fn prompt_for_confirmation_with_diff<F>(
+    message: &str,
+    yes: bool,
+    diff_fn: F,
+) -> Result<bool>
+where
+    F: Fn() -> Result<()>,
+{
+    if yes { return Ok(true); }
+    use std::io::{self, Write};
+    loop {
+        print!("{} [y/N/d]: ", message);
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+        match input.as_str() {
+            "y" | "yes" => return Ok(true),
+            "n" | "no" | "" => return Ok(false),
+            "d" | "diff" => { println!("\n📋 Migration Details:"); diff_fn()?; println!(""); }
+            _ => println!("Please enter 'y' (yes), 'n' (no), or 'd' (diff)"),
+        }
+    }
+}
+
+/// Prints a formatted SQL migration diff block to stdout for easy identification
+pub fn display_sql_migration(migration_id: &str, sql: &str, direction: &str) -> Result<()> {
+    let header_line = "────────────────────────────────────────────────────────";
+    println!("");
+    println!("▶ Migration: {} [{}]", migration_id, direction);
+    println!("{}", header_line);
+    print!("{}", sql);
+    if !sql.ends_with('\n') { println!(""); }
+    println!("{}", header_line);
+    println!("");
+    Ok(())
+}
+
+/// Render a migration table given local and remote data in a unified way
+pub fn render_migration_table(
+    local_ids: &std::collections::HashSet<String>,
+    remote_history: &[(String, NaiveDateTime)],
+) -> Result<()> {
+    use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, ContentArrangement, Table, CellAlignment};
+    use std::collections::BTreeMap;
+
+    let mut all: BTreeMap<String, (Option<NaiveDateTime>, bool)> = BTreeMap::new();
+    for id in local_ids {
+        let entry = all.entry(id.clone()).or_default();
+        entry.1 = true;
+    }
+    for (id, ts) in remote_history.iter() {
+        let entry = all.entry(id.clone()).or_default();
+        entry.0 = Some(*ts);
+    }
+
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec![
+            Cell::new("Migration ID"),
+            Cell::new("Remote"),
+            Cell::new("Local"),
+        ]);
+
+    for (id, (applied_at, is_local)) in all {
+        let remote_str = if let Some(ts) = applied_at {
+            let utc_dt = Local.from_utc_datetime(&ts);
+            utc_dt.format("%Y-%m-%d %H:%M:%S %Z").to_string()
+        } else { "❌".to_string() };
+        let local_str = if is_local { "✅" } else { "❌" };
+        table.add_row(vec![
+            Cell::new(id),
+            Cell::new(remote_str).set_alignment(CellAlignment::Center),
+            Cell::new(local_str).set_alignment(CellAlignment::Center),
+        ]);
+    }
+
+    println!("{table}");
+    Ok(())
+}
+
+

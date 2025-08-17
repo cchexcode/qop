@@ -4,12 +4,14 @@ use {
     chrono::NaiveDateTime,
     pep440_rs::Version,
     sqlx::{postgres::PgRow, Pool, Postgres, QueryBuilder, Row},
+    sqlx::postgres::PgPoolOptions,
     std::{
         collections::{HashMap, HashSet},
         path::Path,
         str::FromStr,
     },
 };
+use crate::config::Subsystem as PostgresSubsystemTag;
 
 // Database utility functions
 pub(crate) fn get_effective_timeout(config: &SubsystemPostgres, provided_timeout: Option<u64>) -> Option<u64> {
@@ -34,48 +36,10 @@ where
     Ok(())
 }
 
-fn prompt_for_confirmation_with_diff<F>(
-    message: &str, 
-    yes: bool,
-    diff_fn: F
-) -> Result<bool> 
-where 
-    F: Fn() -> Result<()>
-{
-    if yes {
-        return Ok(true);
-    }
-    
-    use std::io::{self, Write};
-    
-    loop {
-        print!("{} [y/N/d]: ", message);
-        io::stdout().flush()?;
-        
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let input = input.trim().to_lowercase();
-        
-        match input.as_str() {
-            "y" | "yes" => return Ok(true),
-            "n" | "no" | "" => return Ok(false),
-            "d" | "diff" => {
-                println!("\n📋 Migration Details:");
-                diff_fn()?;
-                println!();
-                continue;
-            }
-            _ => {
-                println!("Please enter 'y' (yes), 'n' (no), or 'd' (diff)");
-                continue;
-            }
-        }
-    }
-}
+use crate::core::migration::prompt_for_confirmation_with_diff;
 
 fn display_migration_diff_from_sql(_migration_id: &str, sql: &str, _direction: &str) -> Result<()> {
-    print!("{}", sql);
-    Ok(())
+    crate::core::migration::display_sql_migration(_migration_id, sql, _direction)
 }
 
 fn create_bulk_migrations_diff_fn<'a>(
@@ -234,13 +198,7 @@ pub(crate) async fn get_all_migration_data(
     Ok(query.build().fetch_all(&mut **tx).await?)
 }
 
-pub(crate) fn normalize_migration_id(id: &str) -> String {
-    if id.starts_with("id=") {
-        id.to_string()
-    } else {
-        format!("id={}", id)
-    }
-}
+pub(crate) use crate::core::migration::normalize_migration_id;
 
 pub(crate) async fn get_recent_migrations_for_revert(
     tx: &mut sqlx::Transaction<'_, Postgres>,
@@ -298,7 +256,6 @@ pub(crate) async fn execute_sql_statements(
 }
 
 pub(crate) async fn get_db_assets(path: &Path, check_cli_version: bool) -> Result<(SubsystemPostgres, Pool<Postgres>)> {
-    use {sqlx::postgres::PgPoolOptions, crate::config::Subsystem};
     
     let config_content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read config file at: {}", path.display()))?;
@@ -310,8 +267,8 @@ pub(crate) async fn get_db_assets(path: &Path, check_cli_version: bool) -> Resul
         .with_context(|| format!("Failed to parse config file at: {}", path.display()))?;
 
     let subsystem_config = match config.subsystem {
-        | Subsystem::Postgres(postgres_config) => postgres_config,
-        | Subsystem::Sqlite(_) => {
+        | PostgresSubsystemTag::Postgres(postgres_config) => postgres_config,
+        | PostgresSubsystemTag::Sqlite(_) => {
             anyhow::bail!("Expected PostgreSQL configuration, found SQLite configuration");
         },
     };
@@ -350,24 +307,7 @@ pub(crate) async fn get_db_assets(path: &Path, check_cli_version: bool) -> Resul
     Ok((subsystem_config, pool))
 }
 
-pub(crate) fn get_local_migrations(path: &Path) -> Result<HashSet<String>> {
-    let migration_dir = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
-    Ok(std::fs::read_dir(migration_dir)
-        .with_context(|| format!("Failed to read migration directory: {}", migration_dir.display()))?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            if entry.file_type().ok()?.is_dir()
-                && entry.file_name().to_string_lossy().starts_with("id=")
-            {
-                Some(entry.file_name().to_string_lossy().into_owned())
-            } else {
-                None
-            }
-        })
-        .collect())
-}
+pub(crate) use crate::core::migration::get_local_migrations;
 
 // High-level command functions
 pub async fn init(path: &Path) -> Result<()> {
@@ -968,14 +908,6 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
 }
 
 pub async fn list(path: &Path) -> Result<()> {
-    use {
-        chrono::{Local, TimeZone, Utc},
-        comfy_table::{
-            modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, ContentArrangement, Table,
-        },
-        std::collections::BTreeMap,
-    };
-    
     let (config, pool) = get_db_assets(path, true).await?;
     let local_migrations = get_local_migrations(path)?;
     let schema = &config.schema;
@@ -984,51 +916,10 @@ pub async fn list(path: &Path) -> Result<()> {
     let mut tx = pool.begin().await?;
 
     let applied_migrations = get_migration_history(&mut tx, &schema, &table).await?;
+    let mut remote: Vec<(String, chrono::NaiveDateTime)> = applied_migrations.into_iter().collect();
+    remote.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let mut all_migrations: BTreeMap<String, (Option<NaiveDateTime>, bool)> = BTreeMap::new();
-
-    for id in &local_migrations {
-        let entry = all_migrations.entry(id.clone()).or_default();
-        entry.1 = true;
-    }
-
-    for (id, timestamp) in &applied_migrations {
-        let entry = all_migrations.entry(id.clone()).or_default();
-        entry.0 = Some(*timestamp);
-    }
-
-    let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL)
-        .apply_modifier(UTF8_ROUND_CORNERS)
-        .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec![
-            Cell::new("ID"),
-            Cell::new("Remote"),
-            Cell::new("Local"),
-        ]);
-
-    if all_migrations.is_empty() {
-        println!("No migrations found.");
-    } else {
-        for (id, (applied_at, is_local)) in all_migrations {
-            let applied_str = if let Some(timestamp) = applied_at {
-                // Convert naive datetime (assumed UTC) to local timezone
-                let utc_datetime = Utc.from_utc_datetime(&timestamp);
-                let local_datetime = utc_datetime.with_timezone(&Local);
-                local_datetime.format("%Y-%m-%d %H:%M:%S %Z").to_string()
-            } else {
-                "❌".to_string()
-            };
-            let local_str = if is_local { "✅" } else { "❌" };
-            table.add_row(vec![
-                Cell::new(id),
-                Cell::new(applied_str).set_alignment(comfy_table::CellAlignment::Center),
-                Cell::new(local_str).set_alignment(comfy_table::CellAlignment::Center),
-            ]);
-        }
-        println!("{table}");
-    }
+    crate::core::migration::render_migration_table(&local_migrations, &remote)?;
 
     tx.commit().await?;
 

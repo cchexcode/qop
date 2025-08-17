@@ -22,6 +22,17 @@ pub enum HistoryCommand {
 }
 
 #[derive(Debug)]
+pub enum ConfigCommand {
+    Init,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Output {
+    Human,
+    Json,
+}
+
+#[derive(Debug)]
 pub enum Command {
     Init,
     New,
@@ -41,7 +52,8 @@ pub enum Command {
         yes: bool,
     },
     Apply(MigrationApply),
-    List,
+    List { output: Output },
     History(HistoryCommand),
     Diff,
+    Config(ConfigCommand),
 }

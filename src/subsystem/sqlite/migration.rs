@@ -1,9 +1,10 @@
 use {
-    crate::config::{SubsystemSqlite, DataSource, WithVersion},
+    crate::config::{SubsystemSqlite, DataSource, WithVersion, Config, Subsystem as SqliteSubsystemTag},
     anyhow::{Context, Result},
     chrono::NaiveDateTime,
     pep440_rs::Version,
     sqlx::{sqlite::SqliteRow, Pool, Sqlite, QueryBuilder, Row},
+    sqlx::sqlite::SqlitePoolOptions,
     std::{
         collections::{HashMap, HashSet},
         path::Path,
@@ -34,47 +35,10 @@ where
     Ok(())
 }
 
-fn prompt_for_confirmation_with_diff<F>(
-    message: &str, 
-    yes: bool,
-    diff_fn: F
-) -> Result<bool> 
-where 
-    F: Fn() -> Result<()>
-{
-    if yes {
-        return Ok(true);
-    }
-    
-    use std::io::{self, Write};
-    
-    loop {
-        print!("{} [y/N/d]: ", message);
-        io::stdout().flush()?;
-        
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let input = input.trim().to_lowercase();
-        
-        match input.as_str() {
-            "y" | "yes" => return Ok(true),
-            "n" | "no" | "" => return Ok(false),
-            "d" | "diff" => {
-                println!("\n📋 Migration Details:");
-                diff_fn()?;
-                println!();
-                continue;
-            }
-            _ => {
-                println!("Please enter 'y' (yes), 'n' (no), or 'd' (diff)");
-                continue;
-            }
-        }
-    }
-}
+use crate::core::migration::prompt_for_confirmation_with_diff;
 
-fn display_sql_migration(_migration_id: &str, sql: &str, _direction: &str) {
-    print!("{}", sql);
+fn display_sql_migration(migration_id: &str, sql: &str, direction: &str) {
+    let _ = crate::core::migration::display_sql_migration(migration_id, sql, direction);
 }
 
 fn create_bulk_migrations_diff_fn<'a>(
@@ -83,7 +47,7 @@ fn create_bulk_migrations_diff_fn<'a>(
 ) -> impl Fn() -> Result<()> + 'a {
     move || -> Result<()> {
         for migration_id in migrations {
-            let (up_sql, _down_sql) = crate::helpers::migration::read_migration_files(
+            let (up_sql, _down_sql) = crate::core::migration::read_migration_files(
                 migration_dir, migration_id
             )?;
             
@@ -254,7 +218,6 @@ pub(crate) async fn execute_sql_statements(
 }
 
 pub(crate) async fn get_db_assets(path: &Path, check_cli_version: bool) -> Result<(SubsystemSqlite, Pool<Sqlite>)> {
-    use {sqlx::sqlite::SqlitePoolOptions, crate::config::{Config, Subsystem}};
     
     let config_content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read config file at: {}", path.display()))?;
@@ -266,8 +229,8 @@ pub(crate) async fn get_db_assets(path: &Path, check_cli_version: bool) -> Resul
         .with_context(|| format!("Failed to parse config file at: {}", path.display()))?;
 
     let sqlite_config = match config.subsystem {
-        | Subsystem::Sqlite(sqlite_config) => sqlite_config,
-        | Subsystem::Postgres(_) => {
+        | SqliteSubsystemTag::Sqlite(sqlite_config) => sqlite_config,
+        | SqliteSubsystemTag::Postgres(_) => {
             anyhow::bail!("Expected SQLite configuration, found PostgreSQL configuration");
         },
     };
@@ -316,7 +279,7 @@ pub(crate) async fn get_db_assets(path: &Path, check_cli_version: bool) -> Resul
 }
 
 pub(crate) fn get_local_migrations(path: &Path) -> Result<HashSet<String>> {
-    crate::helpers::migration::get_local_migrations(path)
+    crate::core::migration::get_local_migrations(path)
 }
 
 // High-level command functions
@@ -334,7 +297,7 @@ pub async fn init(path: &Path) -> Result<()> {
 }
 
 pub async fn new_migration(path: &Path) -> Result<()> {
-    use crate::helpers::migration::create_migration_directory;
+    use crate::core::migration::create_migration_directory;
     
     let migration_id_path = create_migration_directory(path)?;
     println!("Created new migration: {}", migration_id_path.display());
@@ -369,13 +332,13 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: 
     };
 
     // Check for non-linear history
-    let out_of_order_migrations = crate::helpers::migration::check_non_linear_history(
+    let out_of_order_migrations = crate::core::migration::check_non_linear_history(
         &applied_migrations, 
         &migrations_to_apply
     );
     if !out_of_order_migrations.is_empty() {
         let max_applied = applied_migrations.iter().max().cloned().unwrap_or_default();
-        if !crate::helpers::migration::handle_non_linear_warning(&out_of_order_migrations, &max_applied)? {
+        if !crate::core::migration::handle_non_linear_warning(&out_of_order_migrations, &max_applied)? {
             println!("Operation cancelled.");
             return Ok(());
         }
@@ -402,7 +365,7 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: 
             println!("⏳ Applying migration: {}", migration_id);
             let id = migration_id.as_str();
 
-            let (up_sql, down_sql) = crate::helpers::migration::read_migration_files(
+            let (up_sql, down_sql) = crate::core::migration::read_migration_files(
                 migration_dir, migration_id
             )?;
 
@@ -437,9 +400,9 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: 
         }
 
         if dry {
-            crate::helpers::migration::print_migration_results(migrations_to_apply.len(), "tested in dry-run mode");
+            crate::core::migration::print_migration_results(migrations_to_apply.len(), "tested in dry-run mode");
         } else {
-            crate::helpers::migration::print_migration_results(migrations_to_apply.len(), "applied");
+            crate::core::migration::print_migration_results(migrations_to_apply.len(), "applied");
         }
     }
 
@@ -526,65 +489,28 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
 }
 
 pub async fn list(path: &Path) -> Result<()> {
-    use {
-        chrono::{Local, TimeZone, Utc},
-        comfy_table::{
-            modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, ContentArrangement, Table,
-        },
-        std::collections::BTreeMap,
-    };
-    
     let (config, pool) = get_db_assets(path, true).await?;
     let local_migrations = get_local_migrations(path)?;
 
     let mut tx = pool.begin().await?;
 
-    let applied_migrations = get_migration_history(&mut tx, &config.table).await?;
+    // Gracefully handle absence of the remote table
+    let table_exists = sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+        .bind(&config.table)
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some();
 
-    let mut all_migrations: BTreeMap<String, (Option<NaiveDateTime>, bool)> = BTreeMap::new();
-
-    for id in &local_migrations {
-        let entry = all_migrations.entry(id.clone()).or_default();
-        entry.1 = true;
-    }
-
-    for (id, timestamp) in &applied_migrations {
-        let entry = all_migrations.entry(id.clone()).or_default();
-        entry.0 = Some(*timestamp);
-    }
-
-    let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL)
-        .apply_modifier(UTF8_ROUND_CORNERS)
-        .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec![
-            Cell::new("ID"),
-            Cell::new("Remote"),
-            Cell::new("Local"),
-        ]);
-
-    if all_migrations.is_empty() {
-        println!("No migrations found.");
+    let applied_map = if table_exists {
+        get_migration_history(&mut tx, &config.table).await?
     } else {
-        for (id, (applied_at, is_local)) in all_migrations {
-            let applied_str = if let Some(timestamp) = applied_at {
-                // Convert naive datetime (assumed UTC) to local timezone
-                let utc_datetime = Utc.from_utc_datetime(&timestamp);
-                let local_datetime = utc_datetime.with_timezone(&Local);
-                local_datetime.format("%Y-%m-%d %H:%M:%S %Z").to_string()
-            } else {
-                "❌".to_string()
-            };
-            let local_str = if is_local { "✅" } else { "❌" };
-            table.add_row(vec![
-                Cell::new(id),
-                Cell::new(applied_str).set_alignment(comfy_table::CellAlignment::Center),
-                Cell::new(local_str).set_alignment(comfy_table::CellAlignment::Center),
-            ]);
-        }
-        println!("{table}");
-    }
+        std::collections::HashMap::new()
+    };
+
+    let mut remote: Vec<(String, chrono::NaiveDateTime)> = applied_map.into_iter().collect();
+    remote.sort_by(|a, b| a.0.cmp(&b.0));
+
+    crate::core::migration::render_migration_table(&local_migrations, &remote)?;
 
     tx.commit().await?;
 
@@ -603,7 +529,7 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
     let local_migrations = get_local_migrations(path)?;
 
     // Normalize the migration ID to include "id=" prefix if not present
-    let target_migration_id = crate::helpers::migration::normalize_migration_id(&id);
+    let target_migration_id = crate::core::migration::normalize_migration_id(&id);
 
     let mut tx = pool.begin().await?;
 
@@ -663,7 +589,7 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
     }
 
     // Confirm migration application  
-    let (up_sql, down_sql) = crate::helpers::migration::read_migration_files(
+    let (up_sql, down_sql) = crate::core::migration::read_migration_files(
         migration_dir, &target_migration_id
     )?;
     
@@ -724,7 +650,7 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
         .ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
 
     // Normalize the migration ID to include "id=" prefix if not present
-    let target_migration_id = crate::helpers::migration::normalize_migration_id(&id);
+    let target_migration_id = crate::core::migration::normalize_migration_id(&id);
 
     let mut tx = pool.begin().await?;
 
@@ -952,7 +878,7 @@ pub async fn diff(path: &Path) -> Result<()> {
         println!("All migrations are up to date.");
     } else {
         for migration_id in &pending_migrations {
-            let (up_sql, _down_sql) = crate::helpers::migration::read_migration_files(
+            let (up_sql, _down_sql) = crate::core::migration::read_migration_files(
                 migration_dir, migration_id
             )?;
 
