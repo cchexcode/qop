@@ -132,18 +132,11 @@ pub(crate) async fn dispatch(subsystem: crate::args::Subsystem) -> anyhow::Resul
                 }
                 crate::subsystem::postgres::commands::Command::Config(cfg) => match cfg {
                     super::postgres::commands::ConfigCommand::Init => {
-                        #[cfg(feature = "postgres")]
-                        {
-                            let cfg = super::postgres::build_sample();
-                            let toml = toml::to_string(&cfg)?;
-                            crate::config_init::write_config(&path, &toml)?;
-                            println!("Wrote sample Postgres config to {}", path.display());
-                            Ok(())
-                        }
-                        #[cfg(not(feature = "postgres"))]
-                        {
-                            anyhow::bail!("postgres feature disabled")
-                        }
+                        let cfg = super::postgres::build_sample();
+                        let toml = toml::to_string(&cfg)?;
+                        crate::config_init::write_config(&path, &toml)?;
+                        println!("Wrote sample Postgres config to {}", path.display());
+                        Ok(())
                     }
                 },
                 crate::subsystem::postgres::commands::Command::History(history_cmd) => match history_cmd {
@@ -175,18 +168,11 @@ pub(crate) async fn dispatch(subsystem: crate::args::Subsystem) -> anyhow::Resul
                 }
                 crate::subsystem::sqlite::commands::Command::Config(cfg) => match cfg {
                     super::sqlite::commands::ConfigCommand::Init => {
-                        #[cfg(feature = "sqlite")]
-                        {
-                            let cfg = super::sqlite::build_sample(&path);
-                            let toml = toml::to_string(&cfg)?;
-                            crate::config_init::write_config(&path, &toml)?;
-                            println!("Wrote sample SQLite config to {}", path.display());
-                            Ok(())
-                        }
-                        #[cfg(not(feature = "sqlite"))]
-                        {
-                            anyhow::bail!("sqlite feature disabled")
-                        }
+                        let cfg = super::sqlite::build_sample(&path);
+                        let toml = toml::to_string(&cfg)?;
+                        crate::config_init::write_config(&path, &toml)?;
+                        println!("Wrote sample SQLite config to {}", path.display());
+                        Ok(())
                     }
                 },
                 crate::subsystem::sqlite::commands::Command::History(history_cmd) => match history_cmd {
