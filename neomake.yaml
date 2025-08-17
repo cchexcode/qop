@@ -182,6 +182,7 @@ nodes:
             echo "- \`$(basename "${file}")\`" >> ./.release/temp/github/README.md
           done
           echo "\n### Signatures\n" >> ./.release/temp/github/README.md
+          echo "_Signer_: \`{{ signer }}\`\n" >> ./.release/temp/github/README.md
           for file in ./.release/temp/signatures/*; do
             echo "- \`$(basename "${file}")\`" >> ./.release/temp/github/README.md
           done
