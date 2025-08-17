@@ -18,34 +18,35 @@ cargo install --path .
 
 ## Getting Started
 
-1.  **Initialize a new project:**
-    ```bash
-    qop init
-    ```
-    This will create a `qop.toml` file in your current directory.
+1.  **Create a migrations directory and config file:**
+    - Create a directory to hold your migrations (for example, `migrations/`). Place your `qop.toml` inside this directory. The tool expects migration folders (like `id=.../`) to live alongside `qop.toml`.
+    - Generate a sample config for your database:
+      - PostgreSQL:
+        ```bash
+        qop subsystem postgres config init -p migrations/qop.toml -c "postgresql://postgres:password@localhost:5432/postgres"
+        ```
+      - SQLite:
+        ```bash
+        qop subsystem sqlite config init -p migrations/qop.toml -d ./app.db
+        ```
 
-2.  **Initialize the database and configuration:**
+2.  **Initialize the migration table:**
     ```bash
-    # Create a sample config file
-    qop subsystem postgres config init -p qop.toml
-    qop subsystem sqlite   config init -p qop.toml
-
-    # Initialize the migration table
-    qop subsystem postgres init -p qop.toml
-    qop subsystem sqlite   init -p qop.toml
+    qop subsystem postgres init -p migrations/qop.toml
+    qop subsystem sqlite   init -p migrations/qop.toml
     ```
 
 3.  **Create your first migration:**
     ```bash
-    qop subsystem postgres new     # For PostgreSQL
-    qop subsystem sqlite new       # For SQLite
+    qop subsystem postgres new -p migrations/qop.toml    # For PostgreSQL
+    qop subsystem sqlite   new -p migrations/qop.toml    # For SQLite
     ```
     This will create a new directory with `up.sql` and `down.sql` files.
 
 4.  **Apply the migration:**
     ```bash
-    qop subsystem postgres up      # For PostgreSQL
-    qop subsystem sqlite up        # For SQLite
+    qop subsystem postgres up -p migrations/qop.toml     # For PostgreSQL
+    qop subsystem sqlite   up -p migrations/qop.toml     # For SQLite
     ```
 
 ## Configuration
@@ -83,7 +84,7 @@ version = ">=0.1.0"
 
 [subsystem.sqlite]
 connection = { static = "sqlite:///path/to/database.db" }
-table = "migrations"
+table = "__qop"
 timeout = 30
 ```
 
@@ -94,26 +95,15 @@ version = ">=0.1.0"
 
 [subsystem.sqlite]
 connection = { from_env = "DATABASE_URL" }
-table = "migrations"
+table = "__qop"
 timeout = 30
 ```
 
-The migration files are expected to be in a directory relative to the `qop.toml` file.
+The migration files live in the same directory as the `qop.toml` file (e.g., `migrations/`). Each migration is a folder named `id=<timestamp>/` containing `up.sql` and `down.sql`.
 
 ## Usage
 
 `qop` provides several commands to manage your database migrations through subsystems.
-
-### `init`
-
-Initializes a new `qop` project by creating a `qop.toml` file in the current directory.
-
-```bash
-qop init --path path/to/your/qop.toml
-```
-
-**Arguments:**
-*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `./qop.toml`)
 
 ### `subsystem`
 
@@ -163,9 +153,7 @@ qop subsystem postgres up --path path/to/your/qop.toml
 *   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
 *   `-c, --count <COUNT>`: The number of migrations to apply. If not specified, all pending migrations are applied.
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
-*   `-d, --diff`: Show raw SQL that will be executed before applying
 *   `-y, --yes`: Skip confirmation prompts and apply migrations automatically
-*   `--dry`: Execute migrations in a transaction but rollback instead of committing (conflicts with `--yes`)
 
 ##### `qop subsystem postgres down`
 
@@ -180,9 +168,7 @@ qop subsystem postgres down --path path/to/your/qop.toml
 *   `-c, --count <COUNT>`: The number of migrations to revert. (default: 1)
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
 *   `-r, --remote`: Use the `down.sql` from the database instead of the local file.
-*   `-d, --diff`: Show raw SQL that will be executed before reverting
 *   `-y, --yes`: Skip confirmation prompts and revert migrations automatically
-*   `--dry`: Execute migrations in a transaction but rollback instead of committing (conflicts with `--yes`)
 
 ##### `qop subsystem postgres list`
 
@@ -191,6 +177,9 @@ Lists all migrations, showing their status (applied or not) and when they were a
 ```bash
 qop subsystem postgres list --path path/to/your/qop.toml
 ```
+
+**Arguments:**
+*   `-o, --output <FORMAT>`: Output format (`human` or `json`). (default: `human`)
 
 ##### `qop subsystem postgres history`
 
@@ -217,7 +206,7 @@ qop subsystem postgres history fix --path path/to/your/qop.toml
 Shows the raw SQL content of pending migrations without applying them.
 
 ```bash
-qop subsystem postgres diff --path path/to/your/qop.toml
+qop --experimental subsystem postgres diff --path path/to/your/qop.toml
 ```
 
 This command outputs the exact SQL content that would be executed for each pending migration, with no additional formatting or headers.
@@ -238,7 +227,6 @@ qop subsystem postgres apply up <ID> --path path/to/your/qop.toml
 *   `<ID>`: Migration ID to apply (required)
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
 *   `-y, --yes`: Skip confirmation prompts and apply migration automatically
-*   `--dry`: Execute migration in a transaction but rollback instead of committing (conflicts with `--yes`)
 
 ###### `qop subsystem postgres apply down`
 
@@ -253,7 +241,6 @@ qop subsystem postgres apply down <ID> --path path/to/your/qop.toml
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
 *   `-r, --remote`: Use the `down.sql` from the database instead of the local file.
 *   `-y, --yes`: Skip confirmation prompts and revert migration automatically
-*   `--dry`: Execute migration in a transaction but rollback instead of committing (conflicts with `--yes`)
 
 #### SQLite Commands
 
@@ -287,9 +274,7 @@ qop subsystem sqlite up --path path/to/your/qop.toml
 *   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
 *   `-c, --count <COUNT>`: The number of migrations to apply.
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
-*   `-d, --diff`: Show raw SQL that will be executed before applying
 *   `-y, --yes`: Skip confirmation prompts and apply migrations automatically
-*   `--dry`: Execute migrations in a transaction but rollback instead of committing (conflicts with `--yes`)
 
 ##### `qop subsystem sqlite down`
 
@@ -304,9 +289,7 @@ qop subsystem sqlite down --path path/to/your/qop.toml
 *   `-c, --count <COUNT>`: The number of migrations to revert.
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
 *   `-r, --remote`: Use the `down.sql` from the database instead of the local file.
-*   `-d, --diff`: Show raw SQL that will be executed before reverting
 *   `-y, --yes`: Skip confirmation prompts and revert migrations automatically
-*   `--dry`: Execute migrations in a transaction but rollback instead of committing (conflicts with `--yes`)
 
 ##### `qop subsystem sqlite list`
 
@@ -315,6 +298,9 @@ Lists all migrations, showing their status and when they were applied.
 ```bash
 qop subsystem sqlite list --path path/to/your/qop.toml
 ```
+
+**Arguments:**
+*   `-o, --output <FORMAT>`: Output format (`human` or `json`). (default: `human`)
 
 ##### `qop subsystem sqlite history sync`
 
@@ -337,7 +323,7 @@ qop subsystem sqlite history fix --path path/to/your/qop.toml
 Shows the raw SQL content of pending migrations without applying them.
 
 ```bash
-qop subsystem sqlite diff --path path/to/your/qop.toml
+qop --experimental subsystem sqlite diff --path path/to/your/qop.toml
 ```
 
 This command outputs the exact SQL content that would be executed for each pending migration, with no additional formatting or headers.
@@ -354,7 +340,6 @@ qop subsystem sqlite apply up <ID> --path path/to/your/qop.toml
 *   `<ID>`: Migration ID to apply (required)
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
 *   `-y, --yes`: Skip confirmation prompts and apply migration automatically
-*   `--dry`: Execute migration in a transaction but rollback instead of committing (conflicts with `--yes`)
 
 ##### `qop subsystem sqlite apply down`
 
@@ -369,7 +354,6 @@ qop subsystem sqlite apply down <ID> --path path/to/your/qop.toml
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
 *   `-r, --remote`: Use the `down.sql` from the database instead of the local file.
 *   `-y, --yes`: Skip confirmation prompts and revert migration automatically
-*   `--dry`: Execute migration in a transaction but rollback instead of committing (conflicts with `--yes`)
 
 ### `man`
 
@@ -401,22 +385,28 @@ qop autocomplete --out completions --shell zsh
 
 ## Migration Preview and Safety Features
 
-### Diff Functionality
+### Preview SQL during confirmation
 
-The `diff` command and `--diff` flag allow you to preview the exact SQL that will be executed before applying migrations:
+During confirmation prompts, type `d` or `diff` to preview the exact SQL for the operation:
 
 ```bash
-# Preview pending migrations
-qop subsystem postgres diff
+# Apply pending migrations (press 'd' at the prompt to preview SQL)
+qop subsystem postgres up -p migrations/qop.toml
 
-# Preview before applying
-qop subsystem postgres up --diff
-
-# Preview before reverting
-qop subsystem postgres down --diff
+# Revert last migration (press 'd' at the prompt to preview SQL)
+qop subsystem postgres down -p migrations/qop.toml
 ```
 
-The diff output shows the raw SQL content exactly as it will be executed, with no additional formatting.
+The preview shows the raw SQL content exactly as it will be executed, with no additional formatting.
+
+### Experimental: Diff command
+
+You can also print pending SQL without prompts using the diff command (experimental; requires `--experimental`):
+
+```bash
+qop --experimental subsystem postgres diff -p migrations/qop.toml
+qop --experimental subsystem sqlite   diff -p migrations/qop.toml
+```
 
 **Example Output:**
 ```sql
@@ -431,9 +421,9 @@ CREATE INDEX idx_users_email ON users(email);
 
 The output contains only the SQL statements from your migration files, making it easy to redirect to files or pipe to other tools.
 
-### Automated and Dry-Run Modes
+### Automated mode
 
-**Skip Confirmations with `--yes`:**
+**Skip confirmations with `--yes`:**
 ```bash
 # Apply all pending migrations without prompts
 qop subsystem postgres up --yes
@@ -442,40 +432,16 @@ qop subsystem postgres up --yes
 qop subsystem postgres down --yes
 ```
 
-**Test with Dry-Run Mode:**
-```bash
-# Execute migrations in a transaction but rollback (test only)
-qop subsystem postgres up --dry
-
-# Test specific migration revert
-qop subsystem postgres down --dry
-```
-
-**Combined Usage:**
-```bash
-# Preview SQL, then apply with confirmation
-qop subsystem postgres up --diff
-
-# Test migration execution without committing
-qop subsystem postgres up --dry
-
-# Apply migrations automatically (useful for CI/CD)
-qop subsystem postgres up --yes
-```
-
-**Note:** The `--dry` and `--yes` flags cannot be used together, as dry-run mode requires manual verification of the rollback.
+Dry-run flags are not currently supported in the stable path and may be introduced behind `--experimental` in future versions.
 
 ### Practical Examples
 
 **Development Workflow:**
 ```bash
 # 1. Check what migrations are pending
-qop subsystem postgres diff
+qop --experimental subsystem postgres diff
 
-# 2. Test the migrations safely
-qop subsystem postgres up --dry
-
-# 3. Apply with confirmation
+# 2. Apply with confirmation
 qop subsystem postgres up
 ```
 
@@ -488,19 +454,16 @@ qop subsystem postgres up --yes
 **Debugging:**
 ```bash
 # Save pending SQL to a file for review
-qop subsystem postgres diff > pending_migrations.sql
+qop --experimental subsystem postgres diff > pending_migrations.sql
 
-# Test specific migration
-qop subsystem postgres apply up id=123456789 --dry
+# Apply a specific migration
+qop subsystem postgres apply up 123456789
 ```
 
 **Database Rollback:**
 ```bash
-# Preview what will be rolled back
-qop subsystem postgres down --diff
-
-# Rollback safely in test
-qop subsystem postgres down --dry
+# Preview what will be rolled back (press 'd' at the prompt)
+qop subsystem postgres down
 
 # Rollback for real
 qop subsystem postgres down --yes
