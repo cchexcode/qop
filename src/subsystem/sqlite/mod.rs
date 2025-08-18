@@ -1,15 +1,15 @@
 pub mod commands;
 pub mod migration;
-#[cfg(feature = "sqlite")]
+#[cfg(feature = "sub+sqlite")]
 pub mod repo;
 pub mod config;
 
-#[cfg(feature = "sqlite")]
+#[cfg(feature = "sub+sqlite")]
 use crate::config::{Config, Subsystem, DataSource};
-#[cfg(feature = "sqlite")]
+#[cfg(feature = "sub+sqlite")]
 use crate::subsystem::sqlite::config::SubsystemSqlite;
 
-#[cfg(feature = "sqlite")]
+#[cfg(feature = "sub+sqlite")]
 pub fn build_sample_with_db_path(db_path: &std::path::Path) -> crate::config::Config {
     Config {
         version: env!("CARGO_PKG_VERSION").to_string(),

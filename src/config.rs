@@ -55,6 +55,8 @@ pub enum DataSource<T: Serialize + DeserializeOwned> {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Subsystem {
+    #[cfg(feature = "sub+postgres")]
     Postgres(crate::subsystem::postgres::config::SubsystemPostgres),
+    #[cfg(feature = "sub+sqlite")]
     Sqlite(crate::subsystem::sqlite::config::SubsystemSqlite),
 }

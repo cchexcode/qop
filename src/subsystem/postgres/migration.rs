@@ -12,7 +12,6 @@ use {
         str::FromStr,
     },
 };
-use crate::config::Subsystem as PostgresSubsystemTag;
 use std::io::{self, Write};
 
 // Database utility functions
@@ -20,9 +19,22 @@ pub(crate) fn get_effective_timeout(config: &SubsystemPostgres, provided_timeout
     provided_timeout.or(config.timeout)
 }
 
+pub(crate) fn quote_ident(ident: &str) -> String {
+    let mut s = String::with_capacity(ident.len() + 2);
+    s.push('"');
+    for ch in ident.chars() {
+        if ch == '"' { s.push('"'); }
+        s.push(ch);
+    }
+    s.push('"');
+    s
+}
+
 pub(crate) fn build_table_query<'a>(base_sql: &'a str, schema: &str, table: &str) -> QueryBuilder<'a, Postgres> {
     let mut query = QueryBuilder::new(base_sql);
-    query.push(format!("{}.{}", schema, table));
+    query.push(quote_ident(schema));
+    query.push(".");
+    query.push(quote_ident(table));
     query
 }
 
@@ -31,7 +43,9 @@ where
     E: sqlx::Executor<'e, Database = Postgres>,
 {
     if let Some(seconds) = timeout_seconds {
-        sqlx::query(&format!("SET LOCAL statement_timeout = '{}s'", seconds))
+        let ms: i64 = (seconds as i64) * 1000;
+        sqlx::query("SET LOCAL statement_timeout = $1")
+            .bind(ms)
             .execute(executor)
             .await?;
     }
@@ -257,69 +271,45 @@ pub(crate) async fn execute_sql_statements(
     Ok(())
 }
 
-pub(crate) async fn get_db_assets(path: &Path, check_cli_version: bool) -> Result<(SubsystemPostgres, Pool<Postgres>)> {
-    
-    let config_content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read config file at: {}", path.display()))?;
-
-    let with_version: WithVersion = toml::from_str(&config_content)?;
-    with_version.validate(env!("CARGO_PKG_VERSION"))?;
-
-    let config: Config = toml::from_str(&config_content)
-        .with_context(|| format!("Failed to parse config file at: {}", path.display()))?;
-
-    let subsystem_config = match config.subsystem {
-        | PostgresSubsystemTag::Postgres(postgres_config) => postgres_config,
-        | PostgresSubsystemTag::Sqlite(_) => {
-            anyhow::bail!("Expected PostgreSQL configuration, found SQLite configuration");
-        },
-    };
-
+pub(crate) async fn build_pool_from_config(path: &Path, subsystem_config: &SubsystemPostgres, check_cli_version: bool) -> Result<Pool<Postgres>> {
     let uri = match &subsystem_config.connection {
-        | DataSource::Static(connection) => {
-            connection.to_owned()
-        },
+        | DataSource::Static(connection) => connection.to_owned(),
         | DataSource::FromEnv(var) => {
-            let v = std::env::var(var).unwrap();
-            v.to_owned()
+            std::env::var(var).with_context(|| {
+                format!(
+                    "Missing environment variable '{}' referenced by [subsystem.postgres].connection in {}",
+                    var,
+                    path.display()
+                )
+            })?
         },
     };
-    
+
     let pool = PgPoolOptions::new().max_connections(10).connect(&uri).await?;
-    let mut tx = pool.begin().await?;
-
     if check_cli_version {
+        let mut tx = pool.begin().await?;
         let last_migration_version = get_table_version(&mut tx, &subsystem_config.table).await?;
-        match last_migration_version {
-            | Some(version) => {
-                let cli_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
-                if cli_version.release() != &[0, 0, 0] {
-                    let last_migration_version = Version::from_str(&version)?;
-                    if last_migration_version > cli_version {
-                        anyhow::bail!("Latest migration table version is older than the CLI version. Please run 'qop subsystem postgres history fix' to rename out-of-order migrations.");
-                    }
+        if let Some(version) = last_migration_version {
+            let cli_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
+            if cli_version.release() != &[0, 0, 0] {
+                let last_migration_version = Version::from_str(&version)?;
+                if last_migration_version > cli_version {
+                    anyhow::bail!("Latest migration table version is older than the CLI version. Please run 'qop subsystem postgres history fix' to rename out-of-order migrations.");
                 }
-            },
-            | None => (),
-        };
+            }
+        }
+        tx.commit().await?;
     }
-
-    tx.commit().await?;
-
-    Ok((subsystem_config, pool))
+    Ok(pool)
 }
 
 pub(crate) use crate::core::migration::get_local_migrations;
 
 // High-level command functions
-pub async fn init(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path, false).await?;
-    let schema = &config.schema;
-    let table = &config.table;
-    
+pub async fn init_with_pool(schema: &str, table: &str, pool: &Pool<Postgres>) -> Result<()> {
     let mut tx = pool.begin().await?;
     {
-        let mut query = build_table_query("CREATE TABLE IF NOT EXISTS ", &schema, &table);
+        let mut query = build_table_query("CREATE TABLE IF NOT EXISTS ", schema, table);
         query.push(" (id VARCHAR PRIMARY KEY, version VARCHAR NOT NULL, up VARCHAR NOT NULL, down VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, pre VARCHAR)");
         query.build().execute(&mut *tx).await?
     };
@@ -329,7 +319,12 @@ pub async fn init(path: &Path) -> Result<()> {
 }
 
 pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: bool, dry: bool, yes: bool) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+    let config_content = std::fs::read_to_string(path)?;
+    let with_version: WithVersion = toml::from_str(&config_content)?;
+    with_version.validate(env!("CARGO_PKG_VERSION"))?;
+    let cfg: Config = toml::from_str(&config_content)?;
+    let config = match cfg.subsystem { crate::config::Subsystem::Postgres(c) => c, _ => anyhow::bail!("expected postgres config") };
+    let pool = build_pool_from_config(path, &config, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
     let effective_timeout = get_effective_timeout(&config, timeout);
@@ -513,7 +508,12 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
 }
 
 pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remote: bool, diff: bool, dry: bool, yes: bool) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+    let config_content = std::fs::read_to_string(path)?;
+    let with_version: WithVersion = toml::from_str(&config_content)?;
+    with_version.validate(env!("CARGO_PKG_VERSION"))?;
+    let cfg: Config = toml::from_str(&config_content)?;
+    let config = match cfg.subsystem { crate::config::Subsystem::Postgres(c) => c, _ => anyhow::bail!("expected postgres config") };
+    let pool = build_pool_from_config(path, &config, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let schema = &config.schema;
@@ -649,7 +649,12 @@ pub async fn new_migration(path: &Path) -> Result<()> {
 }
 
 pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, yes: bool) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+    let config_content = std::fs::read_to_string(path)?;
+    let with_version: WithVersion = toml::from_str(&config_content)?;
+    with_version.validate(env!("CARGO_PKG_VERSION"))?;
+    let cfg: Config = toml::from_str(&config_content)?;
+    let config = match cfg.subsystem { crate::config::Subsystem::Postgres(c) => c, _ => anyhow::bail!("expected postgres config") };
+    let pool = build_pool_from_config(path, &config, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path
         .parent()
@@ -787,7 +792,12 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
 }
 
 pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: bool, dry: bool, yes: bool) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+    let config_content = std::fs::read_to_string(path)?;
+    let with_version: WithVersion = toml::from_str(&config_content)?;
+    with_version.validate(env!("CARGO_PKG_VERSION"))?;
+    let cfg: Config = toml::from_str(&config_content)?;
+    let config = match cfg.subsystem { crate::config::Subsystem::Postgres(c) => c, _ => anyhow::bail!("expected postgres config") };
+    let pool = build_pool_from_config(path, &config, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path
         .parent()
@@ -899,11 +909,10 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
     Ok(())
 }
 
-pub async fn list(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+pub async fn list(path: &Path, schema: &str, table: &str, pool: &Pool<Postgres>) -> Result<()> {
     let local_migrations = get_local_migrations(path)?;
-    let schema = &config.schema;
-    let table = &config.table;
+    let schema = schema;
+    let table = table;
 
     let mut tx = pool.begin().await?;
 
@@ -918,12 +927,11 @@ pub async fn list(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn history_fix(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+pub async fn history_fix(path: &Path, schema: &str, table: &str, pool: &Pool<Postgres>) -> Result<()> {
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
-    let schema = &config.schema;
-    let table = &config.table;
+    let schema = schema;
+    let table = table;
 
     let mut tx = pool.begin().await?;
 
@@ -971,11 +979,10 @@ pub async fn history_fix(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn history_sync(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+pub async fn history_sync(path: &Path, schema: &str, table: &str, pool: &Pool<Postgres>) -> Result<()> {
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
-    let schema = &config.schema;
-    let table = &config.table;
+    let schema = schema;
+    let table = table;
     
     let mut tx = pool.begin().await?;
 
@@ -1018,13 +1025,11 @@ pub async fn history_sync(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn diff(path: &Path) -> Result<()> {
-    
-    let (config, pool) = get_db_assets(path, true).await?;
+pub async fn diff(path: &Path, schema: &str, table: &str, pool: &Pool<Postgres>) -> Result<()> {
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
-    let schema = &config.schema;
-    let table = &config.table;
+    let schema = schema;
+    let table = table;
 
     let mut tx = pool.begin().await?;
 

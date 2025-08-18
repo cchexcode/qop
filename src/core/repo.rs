@@ -12,6 +12,7 @@ pub trait MigrationRepository {
     async fn fetch_history(&self) -> Result<Vec<(String, NaiveDateTime)>>;
     async fn fetch_recent_for_revert_remote(&self) -> Result<Vec<(String, String)>>; // id, down
     async fn fetch_down_sql(&self, id: &str) -> Result<Option<String>>;
+    async fn fetch_all_migrations(&self) -> Result<Vec<(String, String, String)>>; // id, up, down
     fn get_path(&self) -> &Path;
 }
 

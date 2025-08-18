@@ -15,7 +15,17 @@ pub struct PostgresRepo {
 
 impl PostgresRepo {
     pub async fn from_path(path: &std::path::Path) -> Result<Self> {
-        let (config, pool) = pg::get_db_assets(path, true).await?;
+        let config_content = std::fs::read_to_string(path)?;
+        let with_version: crate::config::WithVersion = toml::from_str(&config_content)?;
+        with_version.validate(env!("CARGO_PKG_VERSION"))?;
+        let cfg: crate::config::Config = toml::from_str(&config_content)?;
+        let subsystem = match cfg.subsystem { crate::config::Subsystem::Postgres(c) => c };
+        let pool = pg::build_pool_from_config(path, &subsystem, true).await?;
+        Ok(Self { config: subsystem, pool, path: path.to_path_buf() })
+    }
+
+    pub async fn from_config(path: &std::path::Path, config: crate::subsystem::postgres::config::SubsystemPostgres) -> Result<Self> {
+        let pool = pg::build_pool_from_config(path, &config, true).await?;
         Ok(Self { config, pool, path: path.to_path_buf() })
     }
 }
@@ -88,6 +98,13 @@ impl MigrationRepository for PostgresRepo {
         let sql = pg::get_migration_down_sql(&mut tx, &self.config.schema, &self.config.table, id).await.ok();
         tx.commit().await?;
         Ok(sql)
+    }
+
+    async fn fetch_all_migrations(&self) -> Result<Vec<(String, String, String)>> {
+        let mut tx = self.pool.begin().await?;
+        let rows = pg::get_all_migration_data(&mut tx, &self.config.schema, &self.config.table).await?;
+        tx.commit().await?;
+        Ok(rows.into_iter().map(|row| (row.get("id"), row.get("up"), row.get("down"))).collect())
     }
 
     fn get_path(&self) -> &std::path::Path { &self.path }

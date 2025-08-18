@@ -1,6 +1,7 @@
 use {
     crate::core::repo::MigrationRepository,
     crate::subsystem::sqlite::migration as sq,
+    crate::subsystem::sqlite::migration,
     anyhow::Result,
     chrono::NaiveDateTime,
     sqlx::{Pool, Sqlite},
@@ -17,7 +18,17 @@ pub struct SqliteRepo {
 
 impl SqliteRepo {
     pub async fn from_path(path: &std::path::Path) -> Result<Self> {
-        let (config, pool) = sq::get_db_assets(path, true).await?;
+        let config_content = std::fs::read_to_string(path)?;
+        let with_version: crate::config::WithVersion = toml::from_str(&config_content)?;
+        with_version.validate(env!("CARGO_PKG_VERSION"))?;
+        let cfg: crate::config::Config = toml::from_str(&config_content)?;
+        let subsystem = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c };
+        let pool = sq::build_pool_from_config(path, &subsystem, true).await?;
+        Ok(Self { config: subsystem, pool, path: path.to_path_buf() })
+    }
+
+    pub async fn from_config(path: &std::path::Path, config: crate::subsystem::sqlite::config::SubsystemSqlite) -> Result<Self> {
+        let pool = sq::build_pool_from_config(path, &config, true).await?;
         Ok(Self { config, pool, path: path.to_path_buf() })
     }
 }
@@ -87,11 +98,21 @@ impl MigrationRepository for SqliteRepo {
         // fetch by reading file in local mode; SQLite path stores down text in table too but no single get function provided
         let mut tx = self.pool.begin().await?;
         let mut q = sqlx::QueryBuilder::new("SELECT down FROM ");
-        q.push(&self.config.table);
+        q.push(migration::quote_ident(&self.config.table));
         q.push(" WHERE id = ?");
         let row = q.build().bind(id).fetch_optional(&mut *tx).await?;
         tx.commit().await?;
         Ok(row.map(|r| r.get("down")))
+    }
+
+    async fn fetch_all_migrations(&self) -> Result<Vec<(String, String, String)>> {
+        let mut tx = self.pool.begin().await?;
+        let mut q = sqlx::QueryBuilder::new("SELECT id, up, down FROM ");
+        q.push(migration::quote_ident(&self.config.table));
+        q.push(" ORDER BY id ASC");
+        let rows = q.build().fetch_all(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(rows.into_iter().map(|row| (row.get("id"), row.get("up"), row.get("down"))).collect())
     }
 
     fn get_path(&self) -> &std::path::Path { &self.path }

@@ -30,11 +30,17 @@ impl CallArgs {
         }
 
         match &self.command {
+            #[cfg(feature = "sub+postgres")]
             | Command::Subsystem(Subsystem::Postgres { command: crate::subsystem::postgres::commands::Command::Diff, .. }) => anyhow::bail!("diff is experimental"),
+            #[cfg(feature = "sub+postgres")]
             | Command::Subsystem(Subsystem::Postgres { command: crate::subsystem::postgres::commands::Command::Up { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
+            #[cfg(feature = "sub+postgres")]
             | Command::Subsystem(Subsystem::Postgres { command: crate::subsystem::postgres::commands::Command::Down { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
+            #[cfg(feature = "sub+sqlite")]
             | Command::Subsystem(Subsystem::Sqlite { command: crate::subsystem::sqlite::commands::Command::Diff, .. }) => anyhow::bail!("diff is experimental"),
+            #[cfg(feature = "sub+sqlite")]
             | Command::Subsystem(Subsystem::Sqlite { command: crate::subsystem::sqlite::commands::Command::Up { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
+            #[cfg(feature = "sub+sqlite")]
             | Command::Subsystem(Subsystem::Sqlite { command: crate::subsystem::sqlite::commands::Command::Down { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
             | _ => (),
         }
@@ -45,11 +51,13 @@ impl CallArgs {
 
 #[derive(Debug)]
 pub(crate) enum Subsystem {
+    #[cfg(feature = "sub+postgres")]
     Postgres {
         path: PathBuf,
         config: crate::subsystem::postgres::config::SubsystemPostgres,
         command: crate::subsystem::postgres::commands::Command,
     },
+    #[cfg(feature = "sub+sqlite")]
     Sqlite {
         path: PathBuf,
         config: crate::subsystem::sqlite::config::SubsystemSqlite,
@@ -85,9 +93,9 @@ impl ClapArgumentLoader {
     }
     pub(crate) fn root_command() -> clap::Command {
         let mut enabled: Vec<&str> = Vec::new();
-        #[cfg(feature = "postgres")]
+        #[cfg(feature = "sub+postgres")]
         { enabled.push("postgres"); }
-        #[cfg(feature = "sqlite")]
+        #[cfg(feature = "sub+sqlite")]
         { enabled.push("sqlite"); }
         let enabled_str = if enabled.is_empty() { String::from("none") } else { enabled.join(", ") };
 
@@ -109,14 +117,14 @@ impl ClapArgumentLoader {
                     .arg(clap::Arg::new("shell").short('s').long("shell").value_parser(["bash", "zsh", "fish", "elvish", "powershell"]).required(true)),
             );
 
-        #[cfg(any(feature = "postgres", feature = "sqlite"))]
+        #[cfg(any(feature = "sub+postgres", feature = "sub+sqlite"))]
         {
             let mut subsystem = clap::Command::new("subsystem")
                 .about(format!("Manages subsystems (enabled: {}).", enabled_str))
                 .subcommand_required(true)
                 .aliases(["sub", "s"]);
 
-            #[cfg(feature = "postgres")]
+            #[cfg(feature = "sub+postgres")]
             {
                 let pg = clap::Command::new("postgres")
                     .aliases(["pg"]).about("Manages PostgreSQL migrations.")
@@ -182,7 +190,7 @@ impl ClapArgumentLoader {
                 subsystem = subsystem.subcommand(pg);
             }
 
-            #[cfg(feature = "sqlite")]
+            #[cfg(feature = "sub+sqlite")]
             {
                 let sql = clap::Command::new("sqlite").aliases(["sql"]).about("Manages SQLite migrations.")
                     .arg(clap::Arg::new("path").short('p').long("path").default_value("qop.toml"))
@@ -278,7 +286,7 @@ impl ClapArgumentLoader {
             }
         } else if let Some(subsystem_subc) = command.subcommand_matches("subsystem") {
             // Try postgres branch if feature enabled
-            #[cfg(feature = "postgres")]
+            #[cfg(feature = "sub+postgres")]
             {
                 if let Some(postgres_subc) = subsystem_subc.subcommand_matches("postgres") {
                     let path = Self::get_absolute_path(postgres_subc, "path")?;
@@ -294,7 +302,10 @@ impl ClapArgumentLoader {
                         } else { unreachable!() }
                     } else {
                         let cfg: crate::config::Config = toml::from_str(&std::fs::read_to_string(&path)?)?;
+                        #[cfg(feature = "sub+sqlite")]
                         let pg_cfg = match cfg.subsystem { crate::config::Subsystem::Postgres(c) => c, _ => anyhow::bail!("config is not postgres"), };
+                        #[cfg(not(feature = "sub+sqlite"))]
+                        let pg_cfg = match cfg.subsystem { crate::config::Subsystem::Postgres(c) => c };
                         let postgres_cmd = if let Some(_) = postgres_subc.subcommand_matches("init") {
                             crate::subsystem::postgres::commands::Command::Init
                         } else if let Some(_) = postgres_subc.subcommand_matches("new") {
@@ -362,7 +373,7 @@ impl ClapArgumentLoader {
                 }
             }
             // Try sqlite branch if feature enabled
-            #[cfg(feature = "sqlite")]
+            #[cfg(feature = "sub+sqlite")]
             {
                 if let Some(sqlite_subc) = subsystem_subc.subcommand_matches("sqlite") {
                     let path = Self::get_absolute_path(sqlite_subc, "path")?;
@@ -378,7 +389,10 @@ impl ClapArgumentLoader {
                         } else { unreachable!() }
                     } else {
                         let cfg: crate::config::Config = toml::from_str(&std::fs::read_to_string(&path)?)?;
+                        #[cfg(feature = "sub+postgres")]
                         let sql_cfg = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c, _ => anyhow::bail!("config is not sqlite"), };
+                        #[cfg(not(feature = "sub+postgres"))]
+                        let sql_cfg = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c };
                         let sqlite_cmd = if let Some(_) = sqlite_subc.subcommand_matches("init") {
                             crate::subsystem::sqlite::commands::Command::Init
                         } else if let Some(_) = sqlite_subc.subcommand_matches("new") {

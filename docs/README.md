@@ -16,6 +16,42 @@
 cargo install --path .
 ```
 
+## Build features
+
+`qop` is built with Cargo feature flags to include only the subsystems you need. SQLite support is enabled by default.
+
+- Default features
+  - Enabled: `sub+sqlite`
+  - Disabled: `sub+postgres` (optional)
+
+- Enable PostgreSQL (keeping default SQLite):
+
+```bash
+cargo build --features "sub+postgres"
+```
+
+- PostgreSQL only (no SQLite):
+
+```bash
+cargo build --no-default-features --features "sub+postgres"
+```
+
+- SQLite only (default):
+
+```bash
+cargo build            # or: cargo build --features "sub+sqlite"
+```
+
+- No subsystems (not allowed):
+
+```bash
+cargo build --no-default-features   # Fails at compile time with a clear error
+```
+
+Notes:
+- Enabling a subsystem feature also enables only the matching `sqlx` backend internally, keeping binaries small.
+- Runtime uses Tokio and Rustls TLS by default. No `sqlx` macros are required.
+
 ## Getting Started
 
 1.  **Create a migrations directory and config file:**

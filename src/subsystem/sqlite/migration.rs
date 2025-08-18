@@ -1,5 +1,5 @@
 use {
-    crate::config::{DataSource, WithVersion, Config, Subsystem as SqliteSubsystemTag},
+    crate::config::{DataSource, WithVersion, Config},
     crate::subsystem::sqlite::config::SubsystemSqlite,
     anyhow::{Context, Result},
     chrono::{NaiveDateTime, Utc},
@@ -21,9 +21,20 @@ pub(crate) fn get_effective_timeout(config: &SubsystemSqlite, provided_timeout: 
     provided_timeout.or(config.timeout)
 }
 
+pub(crate) fn quote_ident(ident: &str) -> String {
+    let mut s = String::with_capacity(ident.len() + 2);
+    s.push('"');
+    for ch in ident.chars() {
+        if ch == '"' { s.push('"'); }
+        s.push(ch);
+    }
+    s.push('"');
+    s
+}
+
 pub(crate) fn build_table_query<'a>(base_sql: &'a str, table: &str) -> QueryBuilder<'a, Sqlite> {
     let mut query = QueryBuilder::new(base_sql);
-    query.push(table);
+    query.push(quote_ident(table));
     query
 }
 
@@ -32,7 +43,9 @@ where
     E: sqlx::Executor<'e, Database = Sqlite>,
 {
     if let Some(seconds) = timeout_seconds {
-        sqlx::query(&format!("PRAGMA busy_timeout = {}", seconds * 1000))
+        let ms: i64 = (seconds as i64) * 1000;
+        sqlx::query("PRAGMA busy_timeout = ?")
+            .bind(ms)
             .execute(executor)
             .await?;
     }
@@ -186,6 +199,26 @@ pub(crate) async fn get_recent_migrations_for_revert(
     Ok(query.build().fetch_all(&mut **tx).await?)
 }
 
+pub(crate) async fn get_all_migration_data(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    table: &str,
+) -> Result<Vec<SqliteRow>> {
+    let mut query = build_table_query("SELECT id, up, down FROM ", table);
+    query.push(" ORDER BY id ASC");
+    Ok(query.build().fetch_all(&mut **tx).await?)
+}
+
+pub(crate) async fn get_migration_down_sql(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    table: &str,
+    migration_id: &str,
+) -> Result<String> {
+    let mut query = build_table_query("SELECT down FROM ", table);
+    query.push(" WHERE id = ?");
+    let row = query.build().bind(migration_id).fetch_one(&mut **tx).await?;
+    Ok(row.get("down"))
+}
+
 
 pub(crate) async fn get_table_version(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
@@ -221,65 +254,42 @@ pub(crate) async fn execute_sql_statements(
     Ok(())
 }
 
-pub(crate) async fn get_db_assets(path: &Path, check_cli_version: bool) -> Result<(SubsystemSqlite, Pool<Sqlite>)> {
-    
-    let config_content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read config file at: {}", path.display()))?;
-
-    let with_version: WithVersion = toml::from_str(&config_content)?;
-    with_version.validate(env!("CARGO_PKG_VERSION"))?;
-
-    let config: Config = toml::from_str(&config_content)
-        .with_context(|| format!("Failed to parse config file at: {}", path.display()))?;
-
-    let sqlite_config = match config.subsystem {
-        | SqliteSubsystemTag::Sqlite(sqlite_config) => sqlite_config,
-        | SqliteSubsystemTag::Postgres(_) => {
-            anyhow::bail!("Expected SQLite configuration, found PostgreSQL configuration");
-        },
-    };
-
+pub(crate) async fn build_pool_from_config(path: &Path, sqlite_config: &SubsystemSqlite, check_cli_version: bool) -> Result<Pool<Sqlite>> {
     let uri = match &sqlite_config.connection {
-        | DataSource::Static(connection) => {
-            connection.to_owned()
-        },
+        | DataSource::Static(connection) => connection.to_owned(),
         | DataSource::FromEnv(var) => {
-            let v = std::env::var(var).unwrap();
-            v.to_owned()
+            std::env::var(var).with_context(|| {
+                format!(
+                    "Missing environment variable '{}' referenced by [subsystem.sqlite].connection in {}",
+                    var,
+                    path.display()
+                )
+            })?
         },
     };
-    
+
     let pool = SqlitePoolOptions::new().max_connections(1).connect(&uri).await?;
-    
     if check_cli_version {
-        // Check if table exists before trying to get version
         let mut tx = pool.begin().await?;
         let table_exists = sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
             .bind(&sqlite_config.table)
             .fetch_optional(&mut *tx)
             .await?
             .is_some();
-        
         if table_exists {
-            let last_migration_version = get_table_version(&mut tx, &sqlite_config.table).await?;
-            match last_migration_version {
-                | Some(version) => {
-                    let cli_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
-                    if cli_version.release() != &[0, 0, 0] {
-                        let last_migration_version = Version::from_str(&version)?;
-                        if last_migration_version > cli_version {
-                            anyhow::bail!("Latest migration table version is older than the CLI version. Please run 'qop subsystem sqlite history fix' to rename out-of-order migrations.");
-                        }
+            if let Some(version) = get_table_version(&mut tx, &sqlite_config.table).await? {
+                let cli_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
+                if cli_version.release() != &[0, 0, 0] {
+                    let last_migration_version = Version::from_str(&version)?;
+                    if last_migration_version > cli_version {
+                        anyhow::bail!("Latest migration table version is older than the CLI version. Please run 'qop subsystem sqlite history fix' to rename out-of-order migrations.");
                     }
-                },
-                | None => (),
-            };
+                }
+            }
         }
-
         tx.commit().await?;
     }
-
-    Ok((sqlite_config, pool))
+    Ok(pool)
 }
 
 pub(crate) fn get_local_migrations(path: &Path) -> Result<HashSet<String>> {
@@ -287,11 +297,10 @@ pub(crate) fn get_local_migrations(path: &Path) -> Result<HashSet<String>> {
 }
 
 // High-level command functions
-pub async fn init(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path, false).await?;
+pub async fn init_with_pool(table: &str, pool: &Pool<Sqlite>) -> Result<()> {
     let mut tx = pool.begin().await?;
     {
-        let mut query = build_table_query("CREATE TABLE IF NOT EXISTS ", &config.table);
+        let mut query = build_table_query("CREATE TABLE IF NOT EXISTS ", table);
         query.push(" (id TEXT PRIMARY KEY, version TEXT NOT NULL, up TEXT NOT NULL, down TEXT NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, pre TEXT)");
         query.build().execute(&mut *tx).await?
     };
@@ -307,7 +316,12 @@ pub async fn new_migration(path: &Path) -> Result<()> {
 }
 
 pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: bool, dry: bool, yes: bool) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+    let config_content = std::fs::read_to_string(path)?;
+    let with_version: WithVersion = toml::from_str(&config_content)?;
+    with_version.validate(env!("CARGO_PKG_VERSION"))?;
+    let cfg: Config = toml::from_str(&config_content)?;
+    let config = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c };
+    let pool = build_pool_from_config(path, &config, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
     let effective_timeout = get_effective_timeout(&config, timeout);
@@ -412,7 +426,12 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: 
 }
 
 pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remote: bool, _diff: bool, dry: bool, yes: bool) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+    let config_content = std::fs::read_to_string(path)?;
+    let with_version: WithVersion = toml::from_str(&config_content)?;
+    with_version.validate(env!("CARGO_PKG_VERSION"))?;
+    let cfg: Config = toml::from_str(&config_content)?;
+    let config = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c };
+    let pool = build_pool_from_config(path, &config, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     
@@ -490,21 +509,20 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
     Ok(())
 }
 
-pub async fn list(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+pub async fn list(path: &Path, table: &str, pool: &Pool<Sqlite>) -> Result<()> {
     let local_migrations = get_local_migrations(path)?;
 
     let mut tx = pool.begin().await?;
 
     // Gracefully handle absence of the remote table
     let table_exists = sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
-        .bind(&config.table)
+        .bind(table)
         .fetch_optional(&mut *tx)
         .await?
         .is_some();
 
     let applied_map = if table_exists {
-        get_migration_history(&mut tx, &config.table).await?
+        get_migration_history(&mut tx, table).await?
     } else {
         std::collections::HashMap::new()
     };
@@ -521,7 +539,12 @@ pub async fn list(path: &Path) -> Result<()> {
 
 // Placeholder implementations for remaining functions
 pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, yes: bool) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+    let config_content = std::fs::read_to_string(path)?;
+    let with_version: WithVersion = toml::from_str(&config_content)?;
+    with_version.validate(env!("CARGO_PKG_VERSION"))?;
+    let cfg: Config = toml::from_str(&config_content)?;
+    let config = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c };
+    let pool = build_pool_from_config(path, &config, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path
         .parent()
@@ -641,7 +664,12 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
 }
 
 pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: bool, dry: bool, yes: bool) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+    let config_content = std::fs::read_to_string(path)?;
+    let with_version: WithVersion = toml::from_str(&config_content)?;
+    with_version.validate(env!("CARGO_PKG_VERSION"))?;
+    let cfg: Config = toml::from_str(&config_content)?;
+    let config = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c };
+    let pool = build_pool_from_config(path, &config, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path
         .parent()
@@ -705,11 +733,9 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
     let down_sql: String = if remote {
         // Get from database
         let mut tx = pool.begin().await?;
-        let mut query = build_table_query("SELECT down FROM ", &config.table);
-        query.push(" WHERE id = ?");
-        let row = query.build().bind(&target_migration_id).fetch_one(&mut *tx).await?;
+        let sql = get_migration_down_sql(&mut tx, &config.table, &target_migration_id).await?;
         tx.commit().await?;
-        row.get("down")
+        sql
     } else {
         // Get from local file
         let down_sql_path = migration_dir.join(&target_migration_id).join("down.sql");
@@ -755,14 +781,13 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
     Ok(())
 }
 
-pub async fn history_fix(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+pub async fn history_fix(path: &Path, table: &str, pool: &Pool<Sqlite>) -> Result<()> {
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
 
     let mut tx = pool.begin().await?;
 
-    let applied_migrations = get_applied_migrations(&mut tx, &config.table).await?;
+    let applied_migrations = get_applied_migrations(&mut tx, table).await?;
 
     let max_applied_migration = applied_migrations.iter().max().cloned().unwrap_or_default();
 
@@ -806,16 +831,13 @@ pub async fn history_fix(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn history_sync(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+pub async fn history_sync(path: &Path, table: &str, pool: &Pool<Sqlite>) -> Result<()> {
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     
     let mut tx = pool.begin().await?;
 
     // Get all migrations from the database
-    let mut query = build_table_query("SELECT id, up, down FROM ", &config.table);
-    query.push(" ORDER BY id ASC");
-    let all_migrations = query.build().fetch_all(&mut *tx).await?;
+    let all_migrations = get_all_migration_data(&mut tx, table).await?;
 
     if all_migrations.is_empty() {
         println!("No migrations to sync.");
@@ -854,14 +876,13 @@ pub async fn history_sync(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn diff(path: &Path) -> Result<()> {
-    let (config, pool) = get_db_assets(path, true).await?;
+pub async fn diff(path: &Path, table: &str, pool: &Pool<Sqlite>) -> Result<()> {
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
 
     let mut tx = pool.begin().await?;
 
-    let applied_migrations = get_applied_migrations(&mut tx, &config.table).await?;
+    let applied_migrations = get_applied_migrations(&mut tx, table).await?;
 
     tx.commit().await?;
 

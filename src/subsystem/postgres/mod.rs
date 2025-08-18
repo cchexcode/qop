@@ -3,12 +3,12 @@ pub mod migration;
 pub mod repo;
 pub mod config;
 
-#[cfg(feature = "postgres")]
+#[cfg(feature = "sub+postgres")]
 use crate::config::{Config, Subsystem, DataSource};
-#[cfg(feature = "postgres")]
+#[cfg(feature = "sub+postgres")]
 use crate::subsystem::postgres::config::SubsystemPostgres;
 
-#[cfg(feature = "postgres")]
+#[cfg(feature = "sub+postgres")]
 pub fn build_sample(connection: &str) -> crate::config::Config {
     Config {
         version: env!("CARGO_PKG_VERSION").to_string(),

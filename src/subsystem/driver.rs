@@ -1,5 +1,6 @@
 use anyhow::{Result, Context};
 use std::path::PathBuf;
+#[cfg(any(feature = "sub+postgres", feature = "sub+sqlite"))]
 use crate::core::service::MigrationService;
 
 /// Common driver API for migration subsystems
@@ -17,11 +18,11 @@ pub trait MigrationDriver {
     async fn diff(&self, path: PathBuf) -> Result<()>;
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(feature = "sub+postgres")]
 pub struct PostgresDriver;
 
 #[async_trait::async_trait(?Send)]
-#[cfg(feature = "postgres")]
+#[cfg(feature = "sub+postgres")]
 impl MigrationDriver for PostgresDriver {
     async fn init(&self, path: PathBuf) -> Result<()> { 
         let repo = super::postgres::repo::PostgresRepo::from_path(&path).await?;
@@ -58,16 +59,25 @@ impl MigrationDriver for PostgresDriver {
         let svc = MigrationService::new(repo);
         svc.list(output).await
     }
-    async fn history_fix(&self, path: PathBuf) -> Result<()> { super::postgres::migration::history_fix(&path).await }
-    async fn history_sync(&self, path: PathBuf) -> Result<()> { super::postgres::migration::history_sync(&path).await }
-    async fn diff(&self, path: PathBuf) -> Result<()> { super::postgres::migration::diff(&path).await }
+    async fn history_fix(&self, path: PathBuf) -> Result<()> { 
+        let repo = super::postgres::repo::PostgresRepo::from_path(&path).await?;
+        super::postgres::migration::history_fix(&path, &repo.config.schema, &repo.config.table, &repo.pool).await 
+    }
+    async fn history_sync(&self, path: PathBuf) -> Result<()> { 
+        let repo = super::postgres::repo::PostgresRepo::from_path(&path).await?;
+        super::postgres::migration::history_sync(&path, &repo.config.schema, &repo.config.table, &repo.pool).await 
+    }
+    async fn diff(&self, path: PathBuf) -> Result<()> { 
+        let repo = super::postgres::repo::PostgresRepo::from_path(&path).await?;
+        super::postgres::migration::diff(&path, &repo.config.schema, &repo.config.table, &repo.pool).await 
+    }
 }
 
-#[cfg(feature = "sqlite")]
+#[cfg(feature = "sub+sqlite")]
 pub struct SqliteDriver;
 
 #[async_trait::async_trait(?Send)]
-#[cfg(feature = "sqlite")]
+#[cfg(feature = "sub+sqlite")]
 impl MigrationDriver for SqliteDriver {
     async fn init(&self, path: PathBuf) -> Result<()> { 
         let repo = super::sqlite::repo::SqliteRepo::from_path(&path).await?;
@@ -104,14 +114,23 @@ impl MigrationDriver for SqliteDriver {
         let svc = MigrationService::new(repo);
         svc.list(output).await
     }
-    async fn history_fix(&self, path: PathBuf) -> Result<()> { super::sqlite::migration::history_fix(&path).await }
-    async fn history_sync(&self, path: PathBuf) -> Result<()> { super::sqlite::migration::history_sync(&path).await }
-    async fn diff(&self, path: PathBuf) -> Result<()> { super::sqlite::migration::diff(&path).await }
+    async fn history_fix(&self, path: PathBuf) -> Result<()> { 
+        let repo = super::sqlite::repo::SqliteRepo::from_path(&path).await?;
+        super::sqlite::migration::history_fix(&path, &repo.config.table, &repo.pool).await 
+    }
+    async fn history_sync(&self, path: PathBuf) -> Result<()> { 
+        let repo = super::sqlite::repo::SqliteRepo::from_path(&path).await?;
+        super::sqlite::migration::history_sync(&path, &repo.config.table, &repo.pool).await 
+    }
+    async fn diff(&self, path: PathBuf) -> Result<()> { 
+        let repo = super::sqlite::repo::SqliteRepo::from_path(&path).await?;
+        super::sqlite::migration::diff(&path, &repo.config.table, &repo.pool).await 
+    }
 }
 
 pub(crate) async fn dispatch(subsystem: crate::args::Subsystem) -> anyhow::Result<()> {
     match subsystem {
-        #[cfg(feature = "postgres")]
+        #[cfg(feature = "sub+postgres")]
         crate::args::Subsystem::Postgres { path, config: _cfg, command } => {
             let driver = PostgresDriver;
             match command {
@@ -155,7 +174,7 @@ pub(crate) async fn dispatch(subsystem: crate::args::Subsystem) -> anyhow::Resul
                 crate::subsystem::postgres::commands::Command::Diff => driver.diff(path).await,
             }
         }
-        #[cfg(feature = "sqlite")]
+        #[cfg(feature = "sub+sqlite")]
         crate::args::Subsystem::Sqlite { path, config: _cfg, command } => {
             let driver = SqliteDriver;
             match command {
