@@ -43,7 +43,7 @@ impl<R: MigrationRepository> MigrationService<R> {
         }
 
         let pre = self.repo.fetch_last_id().await?;
-        self.repo.apply_migration(&target_id, &up_sql, &down_sql, pre.as_deref(), timeout).await?;
+        self.repo.apply_migration(&target_id, &up_sql, &down_sql, pre.as_deref(), timeout, false).await?;
         util::print_migration_results(1, "applied");
         Ok(())
     }
@@ -64,7 +64,7 @@ impl<R: MigrationRepository> MigrationService<R> {
             return Ok(())
         }
 
-        self.repo.revert_migration(&target_id, &down_sql, timeout).await?;
+        self.repo.revert_migration(&target_id, &down_sql, timeout, false).await?;
         util::print_migration_results(1, "reverted");
         Ok(())
     }
@@ -186,7 +186,7 @@ impl<R: MigrationRepository> MigrationService<R> {
         let mut applied_count = 0usize;
         for id in to_apply {
             let (up_sql, down_sql) = util::read_migration_files(migration_dir, &id)?;
-            self.repo.apply_migration(&id, &up_sql, &down_sql, previous.as_deref(), timeout).await?;
+            self.repo.apply_migration(&id, &up_sql, &down_sql, previous.as_deref(), timeout, false).await?;
             previous = Some(id.clone());
             applied_count += 1;
         }
@@ -238,7 +238,7 @@ impl<R: MigrationRepository> MigrationService<R> {
                 let p = migration_dir.join(&id).join("down.sql");
                 std::fs::read_to_string(&p)?
             };
-            self.repo.revert_migration(&id, &down_sql, timeout).await?;
+            self.repo.revert_migration(&id, &down_sql, timeout, false).await?;
             reverted += 1;
         }
 

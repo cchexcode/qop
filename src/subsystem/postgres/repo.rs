@@ -19,7 +19,7 @@ impl PostgresRepo {
         let with_version: crate::config::WithVersion = toml::from_str(&config_content)?;
         with_version.validate(env!("CARGO_PKG_VERSION"))?;
         let cfg: crate::config::Config = toml::from_str(&config_content)?;
-        let subsystem = match cfg.subsystem { crate::config::Subsystem::Postgres(c) => c };
+        let subsystem = match cfg.subsystem { crate::config::Subsystem::Postgres(c) => c, _ => unreachable!() };
         let pool = pg::build_pool_from_config(path, &subsystem, true).await?;
         Ok(Self { config: subsystem, pool, path: path.to_path_buf() })
     }
@@ -57,23 +57,23 @@ impl MigrationRepository for PostgresRepo {
         Ok(id)
     }
 
-    async fn apply_migration(&self, id: &str, up_sql: &str, down_sql: &str, pre: Option<&str>, timeout: Option<u64>) -> Result<()> {
+    async fn apply_migration(&self, id: &str, up_sql: &str, down_sql: &str, pre: Option<&str>, timeout: Option<u64>, dry_run: bool) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         pg::set_timeout_if_needed(&mut *tx, timeout).await?;
 
         pg::execute_sql_statements(&mut tx, up_sql, id).await?;
         pg::insert_migration_record(&mut *tx, &self.config.schema, &self.config.table, id, up_sql, down_sql, pre).await?;
 
-        tx.commit().await?;
+        if dry_run { tx.rollback().await?; } else { tx.commit().await?; }
         Ok(())
     }
 
-    async fn revert_migration(&self, id: &str, down_sql: &str, timeout: Option<u64>) -> Result<()> {
+    async fn revert_migration(&self, id: &str, down_sql: &str, timeout: Option<u64>, dry_run: bool) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         pg::set_timeout_if_needed(&mut *tx, timeout).await?;
         pg::execute_sql_statements(&mut tx, down_sql, id).await?;
         pg::delete_migration_record(&mut *tx, &self.config.schema, &self.config.table, id).await?;
-        tx.commit().await?;
+        if dry_run { tx.rollback().await?; } else { tx.commit().await?; }
         Ok(())
     }
 

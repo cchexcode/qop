@@ -320,7 +320,8 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: 
     let with_version: WithVersion = toml::from_str(&config_content)?;
     with_version.validate(env!("CARGO_PKG_VERSION"))?;
     let cfg: Config = toml::from_str(&config_content)?;
-    let config = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c };
+    #[allow(unreachable_patterns)]
+    let config = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c, _ => anyhow::bail!("expected sqlite config") };
     let pool = build_pool_from_config(path, &config, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
@@ -430,7 +431,8 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
     let with_version: WithVersion = toml::from_str(&config_content)?;
     with_version.validate(env!("CARGO_PKG_VERSION"))?;
     let cfg: Config = toml::from_str(&config_content)?;
-    let config = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c };
+    #[allow(unreachable_patterns)]
+    let config = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c, _ => anyhow::bail!("expected sqlite config") };
     let pool = build_pool_from_config(path, &config, true).await?;
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let effective_timeout = get_effective_timeout(&config, timeout);
@@ -543,7 +545,8 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
     let with_version: WithVersion = toml::from_str(&config_content)?;
     with_version.validate(env!("CARGO_PKG_VERSION"))?;
     let cfg: Config = toml::from_str(&config_content)?;
-    let config = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c };
+    #[allow(unreachable_patterns)]
+    let config = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c, _ => anyhow::bail!("expected sqlite config") };
     let pool = build_pool_from_config(path, &config, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path
@@ -668,7 +671,8 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
     let with_version: WithVersion = toml::from_str(&config_content)?;
     with_version.validate(env!("CARGO_PKG_VERSION"))?;
     let cfg: Config = toml::from_str(&config_content)?;
-    let config = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c };
+    #[allow(unreachable_patterns)]
+    let config = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c, _ => anyhow::bail!("expected sqlite config") };
     let pool = build_pool_from_config(path, &config, true).await?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let migration_dir = path

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::config::DataSource;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SubsystemPostgres {
     pub connection: DataSource<String>,
