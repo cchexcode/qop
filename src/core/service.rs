@@ -31,7 +31,7 @@ impl<R: MigrationRepository> MigrationService<R> {
         Ok(())
     }
 
-    pub async fn apply_up(&self, path: &Path, id: &str, timeout: Option<u64>, yes: bool) -> Result<()> {
+    pub async fn apply_up(&self, path: &Path, id: &str, timeout: Option<u64>, yes: bool, dry_run: bool) -> Result<()> {
         let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
         let target_id = util::normalize_migration_id(id);
         let (up_sql, down_sql) = util::read_migration_files(migration_dir, &target_id)?;
@@ -43,12 +43,12 @@ impl<R: MigrationRepository> MigrationService<R> {
         }
 
         let pre = self.repo.fetch_last_id().await?;
-        self.repo.apply_migration(&target_id, &up_sql, &down_sql, pre.as_deref(), timeout, false).await?;
+        self.repo.apply_migration(&target_id, &up_sql, &down_sql, pre.as_deref(), timeout, dry_run).await?;
         util::print_migration_results(1, "applied");
         Ok(())
     }
 
-    pub async fn apply_down(&self, path: &Path, id: &str, timeout: Option<u64>, remote: bool, yes: bool) -> Result<()> {
+    pub async fn apply_down(&self, path: &Path, id: &str, timeout: Option<u64>, remote: bool, yes: bool, dry_run: bool) -> Result<()> {
         let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
         let target_id = util::normalize_migration_id(id);
         let down_sql = if remote {
@@ -64,7 +64,7 @@ impl<R: MigrationRepository> MigrationService<R> {
             return Ok(())
         }
 
-        self.repo.revert_migration(&target_id, &down_sql, timeout, false).await?;
+        self.repo.revert_migration(&target_id, &down_sql, timeout, dry_run).await?;
         util::print_migration_results(1, "reverted");
         Ok(())
     }
@@ -142,7 +142,7 @@ impl<R: MigrationRepository> MigrationService<R> {
         }
     }
 
-    pub async fn up(&self, path: &Path, timeout: Option<u64>, count: Option<usize>, yes: bool) -> Result<()> {
+    pub async fn up(&self, path: &Path, timeout: Option<u64>, count: Option<usize>, yes: bool, dry_run: bool) -> Result<()> {
         let local = util::get_local_migrations(path)?;
         let applied = self.repo.fetch_applied_ids().await?;
 
@@ -186,7 +186,7 @@ impl<R: MigrationRepository> MigrationService<R> {
         let mut applied_count = 0usize;
         for id in to_apply {
             let (up_sql, down_sql) = util::read_migration_files(migration_dir, &id)?;
-            self.repo.apply_migration(&id, &up_sql, &down_sql, previous.as_deref(), timeout, false).await?;
+            self.repo.apply_migration(&id, &up_sql, &down_sql, previous.as_deref(), timeout, dry_run).await?;
             previous = Some(id.clone());
             applied_count += 1;
         }
@@ -195,7 +195,7 @@ impl<R: MigrationRepository> MigrationService<R> {
         Ok(())
     }
 
-    pub async fn down(&self, path: &Path, timeout: Option<u64>, count: Option<usize>, remote: bool, yes: bool) -> Result<()> {
+    pub async fn down(&self, path: &Path, timeout: Option<u64>, count: Option<usize>, remote: bool, yes: bool, dry_run: bool) -> Result<()> {
         let applied = self.repo.fetch_applied_ids().await?;
         if applied.is_empty() {
             println!("No migrations applied.");
@@ -238,7 +238,7 @@ impl<R: MigrationRepository> MigrationService<R> {
                 let p = migration_dir.join(&id).join("down.sql");
                 std::fs::read_to_string(&p)?
             };
-            self.repo.revert_migration(&id, &down_sql, timeout, false).await?;
+            self.repo.revert_migration(&id, &down_sql, timeout, dry_run).await?;
             reverted += 1;
         }
 

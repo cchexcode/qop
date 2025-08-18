@@ -20,26 +20,26 @@ pub(crate) async fn dispatch(subsystem: crate::args::Subsystem) -> anyhow::Resul
                     let svc = MigrationService::new(repo);
                     svc.new_migration(&path).await
                 }
-                crate::subsystem::postgres::commands::Command::Up { timeout, count, diff: _, dry: _, yes } => {
+                crate::subsystem::postgres::commands::Command::Up { timeout, count, diff: _, dry, yes } => {
                     let repo = super::postgres::repo::PostgresRepo::from_config(&path, config.clone()).await?;
                     let svc = MigrationService::new(repo);
-                    svc.up(&path, timeout, count, yes).await
+                    svc.up(&path, timeout, count, yes, dry).await
                 }
-                crate::subsystem::postgres::commands::Command::Down { timeout, count, remote, diff: _, dry: _, yes } => {
+                crate::subsystem::postgres::commands::Command::Down { timeout, count, remote, diff: _, dry, yes } => {
                     let repo = super::postgres::repo::PostgresRepo::from_config(&path, config.clone()).await?;
                     let svc = MigrationService::new(repo);
-                    svc.down(&path, timeout, count, remote, yes).await
+                    svc.down(&path, timeout, count, remote, yes, dry).await
                 }
                 crate::subsystem::postgres::commands::Command::Apply(apply_cmd) => match apply_cmd {
                     crate::subsystem::postgres::commands::MigrationApply::Up { id, timeout, dry, yes } => {
                         let repo = super::postgres::repo::PostgresRepo::from_config(&path, config.clone()).await?;
                         let svc = MigrationService::new(repo);
-                        svc.apply_up(&path, &id, timeout, yes).await
+                        svc.apply_up(&path, &id, timeout, yes, dry).await
                     }
                     crate::subsystem::postgres::commands::MigrationApply::Down { id, timeout, remote, dry, yes } => {
                         let repo = super::postgres::repo::PostgresRepo::from_config(&path, config.clone()).await?;
                         let svc = MigrationService::new(repo);
-                        svc.apply_down(&path, &id, timeout, remote, yes).await
+                        svc.apply_down(&path, &id, timeout, remote, yes, dry).await
                     }
                 },
                 crate::subsystem::postgres::commands::Command::List { output } => {
@@ -99,26 +99,26 @@ pub(crate) async fn dispatch(subsystem: crate::args::Subsystem) -> anyhow::Resul
                     let svc = MigrationService::new(repo);
                     svc.new_migration(&path).await
                 }
-                crate::subsystem::sqlite::commands::Command::Up { timeout, count, diff: _, dry: _, yes } => {
+                crate::subsystem::sqlite::commands::Command::Up { timeout, count, diff: _, dry, yes } => {
                     let repo = super::sqlite::repo::SqliteRepo::from_config(&path, config.clone()).await?;
                     let svc = MigrationService::new(repo);
-                    svc.up(&path, timeout, count, yes).await
+                    svc.up(&path, timeout, count, yes, dry).await
                 }
-                crate::subsystem::sqlite::commands::Command::Down { timeout, count, remote, diff: _, dry: _, yes } => {
+                crate::subsystem::sqlite::commands::Command::Down { timeout, count, remote, diff: _, dry, yes } => {
                     let repo = super::sqlite::repo::SqliteRepo::from_config(&path, config.clone()).await?;
                     let svc = MigrationService::new(repo);
-                    svc.down(&path, timeout, count, remote, yes).await
+                    svc.down(&path, timeout, count, remote, yes, dry).await
                 }
                 crate::subsystem::sqlite::commands::Command::Apply(apply_cmd) => match apply_cmd {
-                    crate::subsystem::sqlite::commands::MigrationApply::Up { id, timeout, dry: _, yes } => {
+                    crate::subsystem::sqlite::commands::MigrationApply::Up { id, timeout, dry, yes } => {
                         let repo = super::sqlite::repo::SqliteRepo::from_config(&path, config.clone()).await?;
                         let svc = MigrationService::new(repo);
-                        svc.apply_up(&path, &id, timeout, yes).await
+                        svc.apply_up(&path, &id, timeout, yes, dry).await
                     }
-                    crate::subsystem::sqlite::commands::MigrationApply::Down { id, timeout, remote, dry: _, yes } => {
+                    crate::subsystem::sqlite::commands::MigrationApply::Down { id, timeout, remote, dry, yes } => {
                         let repo = super::sqlite::repo::SqliteRepo::from_config(&path, config.clone()).await?;
                         let svc = MigrationService::new(repo);
-                        svc.apply_down(&path, &id, timeout, remote, yes).await
+                        svc.apply_down(&path, &id, timeout, remote, yes, dry).await
                     }
                 },
                 crate::subsystem::sqlite::commands::Command::List { output } => {
