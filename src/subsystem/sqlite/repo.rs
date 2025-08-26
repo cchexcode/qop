@@ -17,7 +17,7 @@ pub struct SqliteRepo {
 }
 
 impl SqliteRepo {
-    pub async fn from_path(path: &std::path::Path) -> Result<Self> {
+    pub async fn from_path(path: &std::path::Path, check_cli_version: bool) -> Result<Self> {
         let config_content = std::fs::read_to_string(path)?;
         let with_version: crate::config::WithVersion = toml::from_str(&config_content)?;
         with_version.validate(env!("CARGO_PKG_VERSION"))?;
@@ -26,12 +26,12 @@ impl SqliteRepo {
             #[allow(unreachable_patterns)]
             match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c, _ => anyhow::bail!("expected sqlite config") }
         };
-        let pool = sq::build_pool_from_config(path, &subsystem, true).await?;
+        let pool = sq::build_pool_from_config(path, &subsystem, check_cli_version).await?;
         Ok(Self { config: subsystem, pool, path: path.to_path_buf() })
     }
 
-    pub async fn from_config(path: &std::path::Path, config: crate::subsystem::sqlite::config::SubsystemSqlite) -> Result<Self> {
-        let pool = sq::build_pool_from_config(path, &config, true).await?;
+    pub async fn from_config(path: &std::path::Path, config: crate::subsystem::sqlite::config::SubsystemSqlite, check_cli_version: bool) -> Result<Self> {
+        let pool = sq::build_pool_from_config(path, &config, check_cli_version).await?;
         Ok(Self { config, pool, path: path.to_path_buf() })
     }
 }

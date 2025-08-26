@@ -14,18 +14,18 @@ pub struct PostgresRepo {
 }
 
 impl PostgresRepo {
-    pub async fn from_path(path: &std::path::Path) -> Result<Self> {
+    pub async fn from_path(path: &std::path::Path, check_cli_version: bool) -> Result<Self> {
         let config_content = std::fs::read_to_string(path)?;
         let with_version: crate::config::WithVersion = toml::from_str(&config_content)?;
         with_version.validate(env!("CARGO_PKG_VERSION"))?;
         let cfg: crate::config::Config = toml::from_str(&config_content)?;
         let subsystem = match cfg.subsystem { crate::config::Subsystem::Postgres(c) => c, _ => unreachable!() };
-        let pool = pg::build_pool_from_config(path, &subsystem, true).await?;
+        let pool = pg::build_pool_from_config(path, &subsystem, check_cli_version).await?;
         Ok(Self { config: subsystem, pool, path: path.to_path_buf() })
     }
 
-    pub async fn from_config(path: &std::path::Path, config: crate::subsystem::postgres::config::SubsystemPostgres) -> Result<Self> {
-        let pool = pg::build_pool_from_config(path, &config, true).await?;
+    pub async fn from_config(path: &std::path::Path, config: crate::subsystem::postgres::config::SubsystemPostgres, check_cli_version: bool) -> Result<Self> {
+        let pool = pg::build_pool_from_config(path, &config, check_cli_version).await?;
         Ok(Self { config, pool, path: path.to_path_buf() })
     }
 }
