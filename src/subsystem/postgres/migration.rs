@@ -3,13 +3,11 @@ use {
     crate::subsystem::postgres::config::SubsystemPostgres,
     anyhow::{Context, Result},
     chrono::{NaiveDateTime, Utc},
-    pep440_rs::Version,
     sqlx::{postgres::PgRow, Pool, Postgres, QueryBuilder, Row},
     sqlx::postgres::PgPoolOptions,
     std::{
         collections::{HashMap, HashSet},
         path::Path,
-        str::FromStr,
     },
 };
 use std::io::{self, Write};
@@ -313,9 +311,9 @@ pub(crate) async fn build_pool_from_config(path: &Path, subsystem_config: &Subsy
         let mut tx = pool.begin().await?;
         let last_migration_version = get_table_version(&mut tx, &subsystem_config.migrations_table()).await?;
         if let Some(version) = last_migration_version {
-            let cli_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
-            if cli_version.release() != &[0, 0, 0] {
-                let last_migration_version = Version::from_str(&version)?;
+            let cli_version = semver::Version::parse(env!("CARGO_PKG_VERSION"))?;
+            if !(cli_version.major == 0 && cli_version.minor == 0 && cli_version.patch == 0) {
+                let last_migration_version = semver::Version::parse(&version)?;
                 if last_migration_version > cli_version {
                     anyhow::bail!("Latest migration table version is older than the CLI version. Please run 'qop subsystem postgres history fix' to rename out-of-order migrations.");
                 }

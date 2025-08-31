@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
-use pep440_rs::{Version, VersionSpecifiers};
-use std::str::FromStr;
+use semver::{Version, VersionReq};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -15,16 +14,17 @@ impl WithVersion {
         //     return Ok(());
         // }
 
-        // Parse CLI version
-        let cli_version = Version::from_str(cli)
+        // Parse CLI version (Cargo semver)
+        let cli_version = Version::parse(cli)
             .map_err(|e| anyhow::anyhow!("Invalid CLI version '{}': {}", cli, e))?;
         
-        // Parse version specification from config
-        let version_specifier = VersionSpecifiers::from_str(&self.version)
-            .map_err(|e| anyhow::anyhow!("Invalid version specification '{}': {}", self.version, e))?;
+        // Parse version requirement from config (Cargo semver expressions)
+        // Examples: ">=0.5.0, <0.6.0", "^0.5", "~0.5.2", "=0.5.3"
+        let version_req = VersionReq::parse(&self.version)
+            .map_err(|e| anyhow::anyhow!("Invalid version requirement '{}': {}", self.version, e))?;
 
         // Check if CLI version matches the specification
-        if !version_specifier.contains(&cli_version) {
+        if !version_req.matches(&cli_version) {
             return Err(anyhow::anyhow!(
                 "Version mismatch: Config indicates required CLI version '{}', but current CLI version is '{}'", 
                 self.version, 

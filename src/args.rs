@@ -295,6 +295,9 @@ impl ClapArgumentLoader {
                         } else { unreachable!() }
                     } else {
                         let cfg: crate::config::Config = toml::from_str(&std::fs::read_to_string(&path)?)?;
+                        // Validate CLI version against config requirement
+                        crate::config::WithVersion { version: cfg.version.clone() }
+                            .validate(env!("CARGO_PKG_VERSION"))?;
                         #[cfg(feature = "sub+sqlite")]
                         let pg_cfg = match cfg.subsystem { crate::config::Subsystem::Postgres(c) => c, _ => anyhow::bail!("config is not postgres"), };
                         #[cfg(not(feature = "sub+sqlite"))]
@@ -387,6 +390,9 @@ impl ClapArgumentLoader {
                         } else { unreachable!() }
                     } else {
                         let cfg: crate::config::Config = toml::from_str(&std::fs::read_to_string(&path)?)?;
+                        // Validate CLI version against config requirement
+                        crate::config::WithVersion { version: cfg.version.clone() }
+                            .validate(env!("CARGO_PKG_VERSION"))?;
                         #[cfg(feature = "sub+postgres")]
                         let sql_cfg = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c, _ => anyhow::bail!("config is not sqlite"), };
                         #[cfg(not(feature = "sub+postgres"))]

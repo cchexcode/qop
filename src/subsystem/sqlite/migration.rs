@@ -3,13 +3,11 @@ use {
     crate::subsystem::sqlite::config::SubsystemSqlite,
     anyhow::{Context, Result},
     chrono::{NaiveDateTime, Utc},
-    pep440_rs::Version,
     sqlx::{sqlite::SqliteRow, Pool, Sqlite, QueryBuilder, Row},
     sqlx::sqlite::SqlitePoolOptions,
     std::{
         collections::{HashMap, HashSet},
         path::Path,
-        str::FromStr,
     },
 };
 
@@ -300,9 +298,9 @@ pub(crate) async fn build_pool_from_config(path: &Path, sqlite_config: &Subsyste
             .is_some();
         if table_exists {
             if let Some(version) = get_table_version(&mut tx, &sqlite_config.migrations_table()).await? {
-                let cli_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
-                if cli_version.release() != &[0, 0, 0] {
-                    let last_migration_version = Version::from_str(&version)?;
+                let cli_version = semver::Version::parse(env!("CARGO_PKG_VERSION"))?;
+                if !(cli_version.major == 0 && cli_version.minor == 0 && cli_version.patch == 0) {
+                    let last_migration_version = semver::Version::parse(&version)?;
                     if last_migration_version > cli_version {
                         anyhow::bail!("Latest migration table version is older than the CLI version. Please run 'qop subsystem sqlite history fix' to rename out-of-order migrations.");
                     }
