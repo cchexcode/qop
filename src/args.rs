@@ -19,6 +19,7 @@ pub(crate) enum ManualFormat {
 
 #[derive(Debug)]
 pub(crate) struct CallArgs {
+    #[allow(dead_code)]
     pub privileges: Privilege,
     pub command: Command,
 }

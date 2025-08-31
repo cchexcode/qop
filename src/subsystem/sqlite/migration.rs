@@ -909,7 +909,8 @@ pub async fn history_sync(path: &Path, migrations_table: &str, pool: &Pool<Sqlit
             let up_sql: String = row.get("up");
             let down_sql: String = row.get("down");
 
-            let migration_id_path = migration_dir.join(&id);
+            // Ensure local directory follows the "id=<id>" convention
+            let migration_id_path = migration_dir.join(format!("id={}", id));
             std::fs::create_dir_all(&migration_id_path).with_context(
                 || {
                     format!(
