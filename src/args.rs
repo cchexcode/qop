@@ -31,13 +31,9 @@ impl CallArgs {
 
         match &self.command {
             #[cfg(feature = "sub+postgres")]
-            | Command::Subsystem(Subsystem::Postgres { command: crate::subsystem::postgres::commands::Command::Diff, .. }) => anyhow::bail!("diff is experimental"),
-            #[cfg(feature = "sub+postgres")]
             | Command::Subsystem(Subsystem::Postgres { command: crate::subsystem::postgres::commands::Command::Up { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
             #[cfg(feature = "sub+postgres")]
             | Command::Subsystem(Subsystem::Postgres { command: crate::subsystem::postgres::commands::Command::Down { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
-            #[cfg(feature = "sub+sqlite")]
-            | Command::Subsystem(Subsystem::Sqlite { command: crate::subsystem::sqlite::commands::Command::Diff, .. }) => anyhow::bail!("diff is experimental"),
             #[cfg(feature = "sub+sqlite")]
             | Command::Subsystem(Subsystem::Sqlite { command: crate::subsystem::sqlite::commands::Command::Up { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
             #[cfg(feature = "sub+sqlite")]
@@ -141,13 +137,16 @@ impl ClapArgumentLoader {
                             )
                     )
                     .subcommand(clap::Command::new("init").about("Initializes the database."))
-                    .subcommand(clap::Command::new("new").about("Creates a new migration."))
+                    .subcommand(clap::Command::new("new").about("Creates a new migration.")
+                        .arg(clap::Arg::new("comment").short('c').long("comment").help("Comment for the migration"))
+                        .arg(clap::Arg::new("locked").long("lock").num_args(0).help("Mark migration as locked (cannot be reverted without --unlock)")))
                     .subcommand(clap::Command::new("up").about("Runs the migrations.")
                         .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
                         .arg(clap::Arg::new("count").short('c').long("count").required(false))
                         .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying"))
                         .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing").conflicts_with("yes"))
                         .arg(clap::Arg::new("yes").short('y').long("yes").required(false).num_args(0).help("Skip confirmation prompts"))
+                        .arg(clap::Arg::new("unlock").long("unlock").num_args(0).help("Allow reverting locked migrations"))
                     )
                     .subcommand(clap::Command::new("down").about("Rolls back the migrations.")
                         .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
@@ -156,6 +155,7 @@ impl ClapArgumentLoader {
                         .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying"))
                         .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing").conflicts_with("yes"))
                         .arg(clap::Arg::new("yes").short('y').long("yes").required(false).num_args(0).help("Skip confirmation prompts"))
+                        .arg(clap::Arg::new("unlock").long("unlock").num_args(0).help("Allow reverting locked migrations"))
                     )
                     .subcommand(clap::Command::new("list").about("Lists all applied migrations.")
                         .arg(clap::Arg::new("output").short('o').long("output").required(false).value_parser(["human", "json"]).help("Output format"))
@@ -176,6 +176,7 @@ impl ClapArgumentLoader {
                                     .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
                                     .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing").conflicts_with("yes"))
                                     .arg(clap::Arg::new("yes").short('y').long("yes").required(false).num_args(0).help("Skip confirmation prompts"))
+                                    .arg(clap::Arg::new("locked").long("lock").num_args(0).help("Mark applied migration as locked (cannot be reverted without --unlock)"))
                             )
                             .subcommand(
                                 clap::Command::new("down")
@@ -185,6 +186,7 @@ impl ClapArgumentLoader {
                                     .arg(clap::Arg::new("remote").short('r').long("remote").required(false).num_args(0))
                                     .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing").conflicts_with("yes"))
                                     .arg(clap::Arg::new("yes").short('y').long("yes").required(false).num_args(0).help("Skip confirmation prompts"))
+                                    .arg(clap::Arg::new("locked").long("lock").num_args(0).help("Mark applied migration as locked (cannot be reverted without --unlock)"))
                             )
                     );
                 subsystem = subsystem.subcommand(pg);
@@ -206,13 +208,16 @@ impl ClapArgumentLoader {
                             )
                     )
                     .subcommand(clap::Command::new("init").about("Initializes the database."))
-                    .subcommand(clap::Command::new("new").about("Creates a new migration."))
+                    .subcommand(clap::Command::new("new").about("Creates a new migration.")
+                        .arg(clap::Arg::new("comment").short('c').long("comment").help("Comment for the migration"))
+                        .arg(clap::Arg::new("locked").long("lock").num_args(0).help("Mark migration as locked (cannot be reverted without --unlock)")))
                     .subcommand(clap::Command::new("up").about("Runs the migrations.")
                         .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
                         .arg(clap::Arg::new("count").short('c').long("count").required(false))
                         .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying"))
                         .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing").conflicts_with("yes"))
                         .arg(clap::Arg::new("yes").short('y').long("yes").required(false).num_args(0).help("Skip confirmation prompts"))
+                        .arg(clap::Arg::new("unlock").long("unlock").num_args(0).help("Allow reverting locked migrations"))
                     )
                     .subcommand(clap::Command::new("down").about("Rolls back the migrations.")
                         .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
@@ -221,6 +226,7 @@ impl ClapArgumentLoader {
                         .arg(clap::Arg::new("diff").short('d').long("diff").required(false).num_args(0).help("Show migration diff before applying"))
                         .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing").conflicts_with("yes"))
                         .arg(clap::Arg::new("yes").short('y').long("yes").required(false).num_args(0).help("Skip confirmation prompts"))
+                        .arg(clap::Arg::new("unlock").long("unlock").num_args(0).help("Allow reverting locked migrations"))
                     )
                     .subcommand(clap::Command::new("list").about("Lists all applied migrations.")
                         .arg(clap::Arg::new("output").short('o').long("output").required(false).value_parser(["human", "json"]).help("Output format"))
@@ -241,6 +247,7 @@ impl ClapArgumentLoader {
                                     .arg(clap::Arg::new("timeout").short('t').long("timeout").required(false))
                                     .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing").conflicts_with("yes"))
                                     .arg(clap::Arg::new("yes").short('y').long("yes").required(false).num_args(0).help("Skip confirmation prompts"))
+                                    .arg(clap::Arg::new("locked").long("lock").num_args(0).help("Mark applied migration as locked (cannot be reverted without --unlock)"))
                             )
                             .subcommand(
                                 clap::Command::new("down")
@@ -250,6 +257,7 @@ impl ClapArgumentLoader {
                                     .arg(clap::Arg::new("remote").short('r').long("remote").required(false).num_args(0))
                                     .arg(clap::Arg::new("dry").long("dry").required(false).num_args(0).help("Execute migration in a transaction but rollback instead of committing").conflicts_with("yes"))
                                     .arg(clap::Arg::new("yes").short('y').long("yes").required(false).num_args(0).help("Skip confirmation prompts"))
+                                    .arg(clap::Arg::new("locked").long("lock").num_args(0).help("Mark applied migration as locked (cannot be reverted without --unlock)"))
                             )
                     );
                 subsystem = subsystem.subcommand(sql);
@@ -308,8 +316,11 @@ impl ClapArgumentLoader {
                         let pg_cfg = match cfg.subsystem { crate::config::Subsystem::Postgres(c) => c };
                         let postgres_cmd = if let Some(_) = postgres_subc.subcommand_matches("init") {
                             crate::subsystem::postgres::commands::Command::Init
-                        } else if let Some(_) = postgres_subc.subcommand_matches("new") {
-                            crate::subsystem::postgres::commands::Command::New
+                        } else if let Some(new_subc) = postgres_subc.subcommand_matches("new") {
+                            crate::subsystem::postgres::commands::Command::New { 
+                                comment: new_subc.get_one::<String>("comment").cloned(),
+                                locked: new_subc.get_flag("locked")
+                            }
                         } else if let Some(up_subc) = postgres_subc.subcommand_matches("up") {
                             crate::subsystem::postgres::commands::Command::Up {
                                 timeout: up_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
@@ -321,11 +332,12 @@ impl ClapArgumentLoader {
                         } else if let Some(down_subc) = postgres_subc.subcommand_matches("down") {
                             crate::subsystem::postgres::commands::Command::Down {
                                 timeout: down_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
-                                count: down_subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
+                                count: down_subc.get_one::<String>("count").unwrap().parse::<usize>().unwrap(),
                                 remote: down_subc.get_flag("remote"),
                                 diff: down_subc.get_flag("diff"),
                                 dry: down_subc.get_flag("dry"),
                                 yes: down_subc.get_flag("yes"),
+                                unlock: down_subc.get_flag("unlock"),
                             }
                         } else if let Some(list_subc) = postgres_subc.subcommand_matches("list") {
                             let out = match list_subc.get_one::<String>("output").map(|s| s.as_str()).unwrap_or("human") {
@@ -360,6 +372,7 @@ impl ClapArgumentLoader {
                                     remote: down_subc.get_flag("remote"),
                                     dry: down_subc.get_flag("dry"),
                                     yes: down_subc.get_flag("yes"),
+                                    unlock: down_subc.get_flag("unlock"),
                                 })
                             } else {
                                 unreachable!();
@@ -395,8 +408,11 @@ impl ClapArgumentLoader {
                         let sql_cfg = match cfg.subsystem { crate::config::Subsystem::Sqlite(c) => c };
                         let sqlite_cmd = if let Some(_) = sqlite_subc.subcommand_matches("init") {
                             crate::subsystem::sqlite::commands::Command::Init
-                        } else if let Some(_) = sqlite_subc.subcommand_matches("new") {
-                            crate::subsystem::sqlite::commands::Command::New
+                        } else if let Some(new_subc) = sqlite_subc.subcommand_matches("new") {
+                            crate::subsystem::sqlite::commands::Command::New { 
+                                comment: new_subc.get_one::<String>("comment").cloned(),
+                                locked: new_subc.get_flag("locked")
+                            }
                         } else if let Some(up_subc) = sqlite_subc.subcommand_matches("up") {
                             crate::subsystem::sqlite::commands::Command::Up {
                                 timeout: up_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
@@ -408,11 +424,12 @@ impl ClapArgumentLoader {
                         } else if let Some(down_subc) = sqlite_subc.subcommand_matches("down") {
                             crate::subsystem::sqlite::commands::Command::Down {
                                 timeout: down_subc.get_one::<String>("timeout").map(|s| s.parse::<u64>().unwrap()),
-                                count: down_subc.get_one::<String>("count").map(|s| s.parse::<usize>().unwrap()),
+                                count: down_subc.get_one::<String>("count").unwrap().parse::<usize>().unwrap(),
                                 remote: down_subc.get_flag("remote"),
                                 diff: down_subc.get_flag("diff"),
                                 dry: down_subc.get_flag("dry"),
                                 yes: down_subc.get_flag("yes"),
+                                unlock: down_subc.get_flag("unlock"),
                             }
                         } else if let Some(list_subc) = sqlite_subc.subcommand_matches("list") {
                             let out = match list_subc.get_one::<String>("output").map(|s| s.as_str()).unwrap_or("human") {
@@ -447,6 +464,7 @@ impl ClapArgumentLoader {
                                     remote: down_subc.get_flag("remote"),
                                     dry: down_subc.get_flag("dry"),
                                     yes: down_subc.get_flag("yes"),
+                                    unlock: down_subc.get_flag("unlock"),
                                 })
                             } else {
                                 unreachable!();

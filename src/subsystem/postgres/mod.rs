@@ -15,7 +15,7 @@ pub fn build_sample(connection: &str) -> crate::config::Config {
         subsystem: Subsystem::Postgres(SubsystemPostgres {
             connection: DataSource::Static(connection.to_string()),
             timeout: Some(60),
-            table: "__qop".to_string(),
+            table_prefix: "__qop".to_string(),
             schema: "public".to_string(),
         }),
     }

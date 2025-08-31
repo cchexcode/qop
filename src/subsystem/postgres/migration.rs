@@ -156,19 +156,23 @@ pub(crate) async fn insert_migration_record<'e, E>(
     id: &str,
     up_sql: &str,
     down_sql: &str,
+    comment: Option<&str>,
     pre_migration_id: Option<&str>,
+    locked: bool,
 ) -> Result<()>
 where
     E: sqlx::Executor<'e, Database = Postgres>,
 {
     let mut query = build_table_query("INSERT INTO ", schema, table);
-    query.push(" (id, version, up, down, pre) VALUES ($1, $2, $3, $4, $5)");
+    query.push(" (id, version, up, down, comment, pre, locked) VALUES ($1, $2, $3, $4, $5, $6, $7)");
     query.build()
         .bind(id)
         .bind(env!("CARGO_PKG_VERSION"))
         .bind(up_sql)
         .bind(down_sql)
+        .bind(comment)
         .bind(pre_migration_id)
+        .bind(locked)
         .execute(executor)
         .await?;
     Ok(())
@@ -189,18 +193,37 @@ where
     Ok(())
 }
 
+pub(crate) async fn is_migration_locked<'e, E>(
+    executor: E,
+    schema: &str,
+    table: &str,
+    id: &str,
+) -> Result<bool>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
+    let mut query = build_table_query("SELECT locked FROM ", schema, table);
+    query.push(" WHERE id = $1");
+    let locked: Option<bool> = query.build()
+        .bind(id)
+        .fetch_optional(executor)
+        .await?
+        .map(|row| row.get("locked"));
+    Ok(locked.unwrap_or(false))
+}
+
 pub(crate) async fn get_migration_history(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     schema: &str,
     table: &str,
-) -> Result<HashMap<String, NaiveDateTime>> {
-    let mut query = build_table_query("SELECT id, created_at FROM ", schema, table);
+) -> Result<HashMap<String, (NaiveDateTime, Option<String>, bool)>> {
+    let mut query = build_table_query("SELECT id, created_at, comment, locked FROM ", schema, table);
     query.push(" ORDER BY id ASC");
     Ok(query.build()
         .fetch_all(&mut **tx)
         .await?
         .into_iter()
-        .map(|row| (row.get("id"), row.get("created_at")))
+        .map(|row| (row.get("id"), (row.get("created_at"), row.get("comment"), row.get("locked"))))
         .collect())
 }
 
@@ -288,7 +311,7 @@ pub(crate) async fn build_pool_from_config(path: &Path, subsystem_config: &Subsy
     let pool = PgPoolOptions::new().max_connections(10).connect(&uri).await?;
     if check_cli_version {
         let mut tx = pool.begin().await?;
-        let last_migration_version = get_table_version(&mut tx, &subsystem_config.table).await?;
+        let last_migration_version = get_table_version(&mut tx, &subsystem_config.migrations_table()).await?;
         if let Some(version) = last_migration_version {
             let cli_version = Version::from_str(env!("CARGO_PKG_VERSION"))?;
             if cli_version.release() != &[0, 0, 0] {
@@ -305,16 +328,48 @@ pub(crate) async fn build_pool_from_config(path: &Path, subsystem_config: &Subsy
 
 pub(crate) use crate::core::migration::get_local_migrations;
 
+// Log operations
+pub(crate) async fn insert_log_entry<'c, E>(
+    executor: E,
+    schema: &str,
+    log_table: &str,
+    migration_id: &str,
+    operation: &str,
+    sql_command: &str,
+) -> Result<()>
+where
+    E: sqlx::Executor<'c, Database = Postgres>,
+{
+    let log_id = uuid::Uuid::now_v7().to_string();
+    let mut query = build_table_query("INSERT INTO ", schema, log_table);
+    query.push(" (id, migration_id, operation, sql_command) VALUES ($1, $2, $3, $4)");
+    query
+        .build()
+        .bind(log_id)
+        .bind(migration_id)
+        .bind(operation)
+        .bind(sql_command)
+        .execute(executor)
+        .await?;
+    Ok(())
+}
+
 // High-level command functions
-pub async fn init_with_pool(schema: &str, table: &str, pool: &Pool<Postgres>) -> Result<()> {
+pub async fn init_with_pool(schema: &str, migrations_table: &str, log_table: &str, pool: &Pool<Postgres>) -> Result<()> {
     let mut tx = pool.begin().await?;
     {
-        let mut query = build_table_query("CREATE TABLE IF NOT EXISTS ", schema, table);
-        query.push(" (id VARCHAR PRIMARY KEY, version VARCHAR NOT NULL, up VARCHAR NOT NULL, down VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, pre VARCHAR)");
-        query.build().execute(&mut *tx).await?
+        // Create migrations table
+        let mut query = build_table_query("CREATE TABLE IF NOT EXISTS ", schema, migrations_table);
+        query.push(" (id VARCHAR PRIMARY KEY, version VARCHAR NOT NULL, up VARCHAR NOT NULL, down VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, pre VARCHAR, comment VARCHAR, locked BOOLEAN NOT NULL DEFAULT FALSE)");
+        query.build().execute(&mut *tx).await?;
+        
+        // Create log table
+        let mut log_query = build_table_query("CREATE TABLE IF NOT EXISTS ", schema, log_table);
+        log_query.push(" (id VARCHAR PRIMARY KEY, migration_id VARCHAR NOT NULL, operation VARCHAR NOT NULL, sql_command TEXT NOT NULL, executed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        log_query.build().execute(&mut *tx).await?;
     };
     tx.commit().await?;
-    println!("Initialized migration table.");
+    println!("Initialized migration tables.");
     Ok(())
 }
 
@@ -329,14 +384,14 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
     let local_migrations = get_local_migrations(path)?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let schema = &config.schema;
-    let table = &config.table;
+    let migrations_table = &config.migrations_table();
 
     let mut tx = pool.begin().await?;
 
     set_timeout_if_needed(&mut *tx, effective_timeout).await?;
 
-    let applied_migrations = get_applied_migrations(&mut tx, &schema, &table).await?;
-    let mut last_migration_id = get_last_migration_id(&mut tx, &schema, &table).await?;
+    let applied_migrations = get_applied_migrations(&mut tx, &schema, &migrations_table).await?;
+    let mut last_migration_id = get_last_migration_id(&mut tx, &schema, &migrations_table).await?;
 
     // Commit the initial query transaction
     tx.commit().await?;
@@ -477,11 +532,13 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
             insert_migration_record(
                 &mut *migration_tx,
                 &schema,
-                &table,
+                &migrations_table,
                 id,
                 &up_sql,
                 &down_sql,
+                None, // comment not available in this legacy function
                 last_migration_id.as_deref(),
+                false, // locked not available in this legacy function
             ).await?;
 
             // Commit or rollback based on dry-run mode
@@ -517,13 +574,13 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let schema = &config.schema;
-    let table = &config.table;
+    let migrations_table = &config.migrations_table();
     
     let mut tx = pool.begin().await?;
 
     set_timeout_if_needed(&mut *tx, effective_timeout).await?;
 
-    let last_migrations = get_recent_migrations_for_revert(&mut tx, &schema, &table).await?;
+    let last_migrations = get_recent_migrations_for_revert(&mut tx, &schema, &migrations_table).await?;
 
     let migrations_to_revert: Vec<PgRow> = if let Some(count) = count {
         last_migrations.into_iter().take(count).collect()
@@ -614,7 +671,7 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
             execute_sql_statements(&mut revert_tx, &down_sql, &id).await?;
 
             // Remove the migration from the tracking table
-            delete_migration_record(&mut *revert_tx, &schema, &table, &id).await?;
+            delete_migration_record(&mut *revert_tx, &schema, &migrations_table, &id).await?;
 
             // Commit or rollback based on dry-run mode
             if dry {
@@ -630,21 +687,10 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
     Ok(())
 }
 
+// Note: This function is deprecated - use the core migration creation service instead
+// which goes through util::create_migration_directory()
 pub async fn new_migration(path: &Path) -> Result<()> {
-    let id = Utc::now().timestamp_millis().to_string();
-    let migration_path = path.parent().unwrap();
-    let migration_id_path = migration_path.join(format!("id={}", id));
-    std::fs::create_dir_all(&migration_id_path).with_context(|| {
-        format!("Failed to create directory: {}", migration_id_path.display())
-    })?;
-    let up_path = migration_id_path.join("up.sql");
-    let down_path = migration_id_path.join("down.sql");
-    std::fs::write(&up_path, "-- SQL goes here").with_context(|| {
-        format!("Failed to write up migration: {}", up_path.display())
-    })?;
-    std::fs::write(&down_path, "-- SQL goes here").with_context(|| {
-        format!("Failed to write down migration: {}", down_path.display())
-    })?;
+    crate::core::migration::create_migration_directory(path, None, false)?;
     Ok(())
 }
 
@@ -661,15 +707,15 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
         .ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
     let schema = &config.schema;
-    let table = &config.table;
+    let migrations_table = &config.migrations_table();
 
-    // Normalize the migration ID to include "id=" prefix if not present
+    // Normalize the migration ID to remove "id=" prefix if present  
     let target_migration_id = normalize_migration_id(&id);
 
     let mut tx = pool.begin().await?;
 
     // Get current applied migrations
-    let applied_migrations = get_applied_migrations(&mut tx, &schema, &table).await?;
+    let applied_migrations = get_applied_migrations(&mut tx, &schema, &migrations_table).await?;
 
     tx.commit().await?;
 
@@ -754,7 +800,7 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
 
     // Get the latest migration for the pre field
     let mut tx = pool.begin().await?;
-    let last_migration_id = get_last_migration_id(&mut tx, &schema, &table).await?;
+    let last_migration_id = get_last_migration_id(&mut tx, &schema, &migrations_table).await?;
     tx.commit().await?;
 
     // Execute the migration
@@ -770,14 +816,16 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
     
     execute_sql_statements(&mut migration_tx, &up_sql, &target_migration_id).await?;
 
-    insert_migration_record(
+        insert_migration_record(
         &mut *migration_tx,
         &schema,
-        &table,
+        &migrations_table,
         &target_migration_id,
         &up_sql,
         &down_sql,
+        None, // comment not available in this legacy function
         last_migration_id.as_deref(),
+        false, // locked not available in this legacy function
     ).await?;
 
     if dry {
@@ -803,15 +851,15 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
         .parent()
         .ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let schema = &config.schema;
-    let table = &config.table;
+    let migrations_table = &config.migrations_table();
 
-    // Normalize the migration ID to include "id=" prefix if not present
+    // Normalize the migration ID to remove "id=" prefix if present  
     let target_migration_id = normalize_migration_id(&id);
 
     let mut tx = pool.begin().await?;
 
     // Get current applied migrations
-    let applied_migrations = get_applied_migrations(&mut tx, &schema, &table).await?;
+    let applied_migrations = get_applied_migrations(&mut tx, &schema, &migrations_table).await?;
 
     tx.commit().await?;
 
@@ -862,7 +910,7 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
     // Get the down SQL from database or local file based on remote flag
     let down_sql: String = if remote {
         let mut tx = pool.begin().await?;
-        let sql = get_migration_down_sql(&mut tx, &schema, &table, &target_migration_id).await?;
+        let sql = get_migration_down_sql(&mut tx, &schema, &migrations_table, &target_migration_id).await?;
         tx.commit().await?;
         sql
     } else {
@@ -896,7 +944,7 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
     
     execute_sql_statements(&mut revert_tx, &down_sql, &target_migration_id).await?;
 
-    delete_migration_record(&mut *revert_tx, &schema, &table, &target_migration_id).await?;
+    delete_migration_record(&mut *revert_tx, &schema, &migrations_table, &target_migration_id).await?;
 
     if dry {
         revert_tx.rollback().await?;
@@ -909,39 +957,38 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
     Ok(())
 }
 
-pub async fn list(path: &Path, schema: &str, table: &str, pool: &Pool<Postgres>) -> Result<()> {
+pub async fn list(path: &Path, schema: &str, migrations_table: &str, pool: &Pool<Postgres>) -> Result<()> {
     let local_migrations = get_local_migrations(path)?;
     let schema = schema;
-    let table = table;
 
     let mut tx = pool.begin().await?;
 
-    let applied_migrations = get_migration_history(&mut tx, &schema, &table).await?;
-    let mut remote: Vec<(String, chrono::NaiveDateTime)> = applied_migrations.into_iter().collect();
+    let applied_migrations = get_migration_history(&mut tx, &schema, &migrations_table).await?;
+    let mut remote: Vec<(String, chrono::NaiveDateTime, Option<String>, bool)> = applied_migrations.into_iter().map(|(id, (ts, comment, locked))| (id, ts, comment, locked)).collect();
     remote.sort_by(|a, b| a.0.cmp(&b.0));
 
-    crate::core::migration::render_migration_table(&local_migrations, &remote)?;
+    let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
+    crate::core::migration::render_migration_table(&local_migrations, &remote, migration_dir)?;
 
     tx.commit().await?;
 
     Ok(())
 }
 
-pub async fn history_fix(path: &Path, schema: &str, table: &str, pool: &Pool<Postgres>) -> Result<()> {
+pub async fn history_fix(path: &Path, schema: &str, migrations_table: &str, pool: &Pool<Postgres>) -> Result<()> {
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
     let schema = schema;
-    let table = table;
 
     let mut tx = pool.begin().await?;
 
-    let applied_migrations = get_applied_migrations(&mut tx, &schema, &table).await?;
+    let applied_migrations = get_applied_migrations(&mut tx, &schema, &migrations_table).await?;
 
     let max_applied_migration = applied_migrations.iter().max().cloned().unwrap_or_default();
 
     let max_applied_ts = applied_migrations
         .iter()
-        .filter_map(|id| id.strip_prefix("id=").and_then(|s| s.parse::<i64>().ok()))
+        .filter_map(|id| id.parse::<i64>().ok())
         .max()
         .unwrap_or(0);
 
@@ -959,7 +1006,7 @@ pub async fn history_fix(path: &Path, schema: &str, table: &str, pool: &Pool<Pos
         for old_id in out_of_order_migrations {
             next_ts += 1;
             let new_id = format!("id={}", next_ts);
-            let old_path = migration_dir.join(&old_id);
+            let old_path = migration_dir.join(format!("id={}", old_id));
             let new_path = migration_dir.join(&new_id);
 
             std::fs::rename(&old_path, &new_path).with_context(|| {
@@ -979,14 +1026,13 @@ pub async fn history_fix(path: &Path, schema: &str, table: &str, pool: &Pool<Pos
     Ok(())
 }
 
-pub async fn history_sync(path: &Path, schema: &str, table: &str, pool: &Pool<Postgres>) -> Result<()> {
+pub async fn history_sync(path: &Path, schema: &str, migrations_table: &str, pool: &Pool<Postgres>) -> Result<()> {
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let schema = schema;
-    let table = table;
     
     let mut tx = pool.begin().await?;
 
-    let all_migrations = get_all_migration_data(&mut tx, &schema, &table).await?;
+    let all_migrations = get_all_migration_data(&mut tx, &schema, &migrations_table).await?;
 
     if all_migrations.is_empty() {
         println!("No migrations to sync.");
@@ -1025,15 +1071,14 @@ pub async fn history_sync(path: &Path, schema: &str, table: &str, pool: &Pool<Po
     Ok(())
 }
 
-pub async fn diff(path: &Path, schema: &str, table: &str, pool: &Pool<Postgres>) -> Result<()> {
+pub async fn diff(path: &Path, schema: &str, migrations_table: &str, pool: &Pool<Postgres>) -> Result<()> {
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
     let schema = schema;
-    let table = table;
 
     let mut tx = pool.begin().await?;
 
-    let applied_migrations = get_applied_migrations(&mut tx, &schema, &table).await?;
+    let applied_migrations = get_applied_migrations(&mut tx, &schema, &migrations_table).await?;
 
     tx.commit().await?;
 

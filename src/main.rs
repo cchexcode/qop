@@ -1,7 +1,6 @@
 pub mod args;
 pub mod reference;
 pub mod config;
-pub mod migration_diff;
 pub mod subsystem;
 pub mod core;
 

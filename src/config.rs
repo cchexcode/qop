@@ -11,9 +11,9 @@ pub struct WithVersion {
 
 impl WithVersion {
     pub fn validate(&self, cli: &str) -> Result<(), anyhow::Error> {
-        if cli == "0.0.0" {
-            return Ok(());
-        }
+        // if cli == "0.0.0" {
+        //     return Ok(());
+        // }
 
         // Parse CLI version
         let cli_version = Version::from_str(cli)
@@ -22,11 +22,11 @@ impl WithVersion {
         // Parse version specification from config
         let version_specifier = VersionSpecifiers::from_str(&self.version)
             .map_err(|e| anyhow::anyhow!("Invalid version specification '{}': {}", self.version, e))?;
-        
+
         // Check if CLI version matches the specification
         if !version_specifier.contains(&cli_version) {
             return Err(anyhow::anyhow!(
-                "Version mismatch: Config requires '{}', but CLI version is '{}'", 
+                "Version mismatch: Config indicates required CLI version '{}', but current CLI version is '{}'", 
                 self.version, 
                 cli
             ));

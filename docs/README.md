@@ -1,13 +1,16 @@
 # qop - A simple database migration tool
 
-`qop` is a command-line tool for managing database migrations for PostgreSQL and SQLite. It's designed to be simple, straightforward, and easy to use.
+`qop` is a command-line tool for managing database migrations for PostgreSQL and SQLite. It's designed to be simple, straightforward, and easy to use. The software respects semantic versioning and will only introduce breaking changes in new `major` versions once passing the `1.0.0` version. While being in-development, breaking changes CAN occur in new `minor` versions.
 
 ## Features
 
 *   Backend-agnostic design (supports PostgreSQL and SQLite)
-*   Simple migration file format (`up.sql`, `down.sql`)
+*   Simple migration file format (`up.sql`, `down.sql`, `meta.toml`)
+*   Migration metadata support (comments, locking status)
+*   Migration locking system to prevent accidental reverts
 *   Timestamp-based migration IDs
 *   Command-line interface for managing migrations
+*   Comprehensive audit logging of all migration operations
 *   No interactive UI; all confirmations happen via CLI prompts or can be bypassed with `--yes`
 
 ## Installation
@@ -15,6 +18,10 @@
 ```bash
 cargo install --path .
 ```
+
+## Migrations
+
+Please find more information about migration from one version to another in the dedicated [release notes](https://github.com/cchexcode/qop/blob/master/docs/releases/).
 
 ## Build features
 
@@ -97,7 +104,7 @@ version = ">=0.1.0"
 [subsystem.postgres]
 connection = { static = "postgresql://postgres:password@localhost:5432/postgres" }
 schema = "public"
-table = "__qop"
+table_prefix = "__qop"
 timeout = 30
 ```
 
@@ -109,7 +116,7 @@ version = ">=0.1.0"
 [subsystem.postgres]
 connection = { from_env = "DATABASE_URL" }
 schema = "public"
-table = "__qop"
+table_prefix = "__qop"
 timeout = 30
 ```
 
@@ -120,7 +127,7 @@ version = ">=0.1.0"
 
 [subsystem.sqlite]
 connection = { static = "sqlite:///path/to/database.db" }
-table = "__qop"
+table_prefix = "__qop"
 timeout = 30
 ```
 
@@ -131,11 +138,11 @@ version = ">=0.1.0"
 
 [subsystem.sqlite]
 connection = { from_env = "DATABASE_URL" }
-table = "__qop"
+table_prefix = "__qop"
 timeout = 30
 ```
 
-The migration files live in the same directory as the `qop.toml` file (e.g., `migrations/`). Each migration is a folder named `id=<timestamp>/` containing `up.sql` and `down.sql`.
+The migration files live in the same directory as the `qop.toml` file (e.g., `migrations/`). Each migration is a folder named `id=<timestamp>/` containing `up.sql`, `down.sql`, and `meta.toml`.
 
 ## Usage
 
@@ -163,18 +170,24 @@ qop subsystem postgres init --path path/to/your/qop.toml
 
 ##### `qop subsystem postgres new`
 
-Creates a new migration directory with `up.sql` and `down.sql` files.
+Creates a new migration directory with `up.sql`, `down.sql`, and `meta.toml` files.
 
 ```bash
 qop subsystem postgres new --path path/to/your/qop.toml
 ```
+
+**Arguments:**
+*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
+*   `-c, --comment <COMMENT>`: Custom comment for the migration
+*   `--lock`: Mark migration as locked (cannot be reverted without --unlock)
 
 This will create a directory structure like:
 ```
 migrations/
 └── id=1678886400000/
     ├── up.sql
-    └── down.sql
+    ├── down.sql
+    └── meta.toml
 ```
 
 ##### `qop subsystem postgres up`
@@ -189,6 +202,7 @@ qop subsystem postgres up --path path/to/your/qop.toml
 *   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
 *   `-c, --count <COUNT>`: The number of migrations to apply. If not specified, all pending migrations are applied.
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
+*   `--dry`: Execute migration in a transaction but rollback instead of committing
 *   `-y, --yes`: Skip confirmation prompts and apply migrations automatically
 
 ##### `qop subsystem postgres down`
@@ -204,6 +218,8 @@ qop subsystem postgres down --path path/to/your/qop.toml
 *   `-c, --count <COUNT>`: The number of migrations to revert. (default: 1)
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
 *   `-r, --remote`: Use the `down.sql` from the database instead of the local file.
+*   `--dry`: Execute migration in a transaction but rollback instead of committing
+*   `--unlock`: Allow reverting locked migrations
 *   `-y, --yes`: Skip confirmation prompts and revert migrations automatically
 
 ##### `qop subsystem postgres list`
@@ -262,6 +278,8 @@ qop subsystem postgres apply up <ID> --path path/to/your/qop.toml
 **Arguments:**
 *   `<ID>`: Migration ID to apply (required)
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
+*   `--dry`: Execute migration in a transaction but rollback instead of committing
+*   `--lock`: Mark applied migration as locked (cannot be reverted without --unlock)
 *   `-y, --yes`: Skip confirmation prompts and apply migration automatically
 
 ###### `qop subsystem postgres apply down`
@@ -276,6 +294,8 @@ qop subsystem postgres apply down <ID> --path path/to/your/qop.toml
 *   `<ID>`: Migration ID to revert (required)
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
 *   `-r, --remote`: Use the `down.sql` from the database instead of the local file.
+*   `--dry`: Execute migration in a transaction but rollback instead of committing
+*   `--unlock`: Allow reverting locked migrations
 *   `-y, --yes`: Skip confirmation prompts and revert migration automatically
 
 #### SQLite Commands
@@ -292,11 +312,16 @@ qop subsystem sqlite init --path path/to/your/qop.toml
 
 ##### `qop subsystem sqlite new`
 
-Creates a new migration directory with `up.sql` and `down.sql` files.
+Creates a new migration directory with `up.sql`, `down.sql`, and `meta.toml` files.
 
 ```bash
 qop subsystem sqlite new --path path/to/your/qop.toml
 ```
+
+**Arguments:**
+*   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
+*   `-c, --comment <COMMENT>`: Custom comment for the migration
+*   `--lock`: Mark migration as locked (cannot be reverted without --unlock)
 
 ##### `qop subsystem sqlite up`
 
@@ -310,6 +335,7 @@ qop subsystem sqlite up --path path/to/your/qop.toml
 *   `-p, --path <PATH>`: Path to the `qop.toml` configuration file. (default: `qop.toml`)
 *   `-c, --count <COUNT>`: The number of migrations to apply.
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
+*   `--dry`: Execute migration in a transaction but rollback instead of committing
 *   `-y, --yes`: Skip confirmation prompts and apply migrations automatically
 
 ##### `qop subsystem sqlite down`
@@ -325,6 +351,8 @@ qop subsystem sqlite down --path path/to/your/qop.toml
 *   `-c, --count <COUNT>`: The number of migrations to revert.
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
 *   `-r, --remote`: Use the `down.sql` from the database instead of the local file.
+*   `--dry`: Execute migration in a transaction but rollback instead of committing
+*   `--unlock`: Allow reverting locked migrations
 *   `-y, --yes`: Skip confirmation prompts and revert migrations automatically
 
 ##### `qop subsystem sqlite list`
@@ -375,6 +403,8 @@ qop subsystem sqlite apply up <ID> --path path/to/your/qop.toml
 **Arguments:**
 *   `<ID>`: Migration ID to apply (required)
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
+*   `--dry`: Execute migration in a transaction but rollback instead of committing
+*   `--lock`: Mark applied migration as locked (cannot be reverted without --unlock)
 *   `-y, --yes`: Skip confirmation prompts and apply migration automatically
 
 ##### `qop subsystem sqlite apply down`
@@ -389,6 +419,8 @@ qop subsystem sqlite apply down <ID> --path path/to/your/qop.toml
 *   `<ID>`: Migration ID to revert (required)
 *   `-t, --timeout <TIMEOUT>`: Statement timeout in seconds.
 *   `-r, --remote`: Use the `down.sql` from the database instead of the local file.
+*   `--dry`: Execute migration in a transaction but rollback instead of committing
+*   `--unlock`: Allow reverting locked migrations
 *   `-y, --yes`: Skip confirmation prompts and revert migration automatically
 
 ### `man`
@@ -468,7 +500,7 @@ qop subsystem postgres up --yes
 qop subsystem postgres down --yes
 ```
 
-Dry-run flags are not currently supported in the stable path and may be introduced behind `--experimental` in future versions.
+The `--dry` flag is now available for all migration commands and executes migrations in a transaction that is rolled back instead of committed, allowing you to test migrations safely.
 
 ### Practical Examples
 

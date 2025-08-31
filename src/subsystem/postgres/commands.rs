@@ -12,6 +12,7 @@ pub enum MigrationApply {
         remote: bool,
         dry: bool,
         yes: bool,
+        unlock: bool,
     },
 }
 
@@ -35,7 +36,7 @@ pub enum Output {
 #[derive(Debug)]
 pub enum Command {
     Init,
-    New,
+    New { comment: Option<String>, locked: bool },
     Up {
         timeout: Option<u64>,
         count: Option<usize>,
@@ -45,11 +46,12 @@ pub enum Command {
     },
     Down {
         timeout: Option<u64>,
-        count: Option<usize>,
+        count: usize,
         remote: bool,
         diff: bool,
         dry: bool,
         yes: bool,
+        unlock: bool,
     },
     Apply(MigrationApply),
     List { output: Output },

@@ -16,7 +16,7 @@ pub fn build_sample_with_db_path(db_path: &std::path::Path) -> crate::config::Co
         subsystem: Subsystem::Sqlite(SubsystemSqlite {
             connection: DataSource::Static(db_path.to_string_lossy().to_string()),
             timeout: Some(60),
-            table: "__qop".to_string(),
+            table_prefix: "__qop".to_string(),
         }),
     }
 }

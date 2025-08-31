@@ -1,4 +1,3 @@
-use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, ContentArrangement, Table, CellAlignment};
 use std::collections::BTreeMap;
 use chrono::{DateTime, TimeZone, Utc};
 use {
@@ -25,16 +24,16 @@ impl<R: MigrationRepository> MigrationService<R> {
         self.repo.init_store().await
     }
 
-    pub async fn new_migration(&self, path: &Path) -> Result<()> {
-        let migration_id_path = util::create_migration_directory(path)?;
+    pub async fn new_migration(&self, path: &Path, comment: Option<&str>, locked: bool) -> Result<()> {
+        let migration_id_path = util::create_migration_directory(path, comment, locked)?;
         println!("Created new migration: {}", migration_id_path.display());
         Ok(())
     }
 
-    pub async fn apply_up(&self, path: &Path, id: &str, timeout: Option<u64>, yes: bool, dry_run: bool) -> Result<()> {
+    pub async fn apply_up(&self, path: &Path, id: &str, timeout: Option<u64>, yes: bool, dry_run: bool, locked: bool) -> Result<()> {
         let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
         let target_id = util::normalize_migration_id(id);
-        let (up_sql, down_sql) = util::read_migration_files(migration_dir, &target_id)?;
+        let (up_sql, down_sql, meta) = util::read_migration_with_meta(migration_dir, &target_id)?;
 
         let diff_fn = || -> Result<()> { util::display_sql_migration(&target_id, &up_sql, "UP") };
         if !util::prompt_for_confirmation_with_diff(&format!("❓ Do you want to apply migration '{}'?",&target_id), yes, diff_fn)? {
@@ -43,19 +42,19 @@ impl<R: MigrationRepository> MigrationService<R> {
         }
 
         let pre = self.repo.fetch_last_id().await?;
-        self.repo.apply_migration(&target_id, &up_sql, &down_sql, pre.as_deref(), timeout, dry_run).await?;
+        self.repo.apply_migration(&target_id, &up_sql, &down_sql, meta.comment.as_deref(), pre.as_deref(), timeout, dry_run, locked).await?;
         util::print_migration_results(1, "applied");
         Ok(())
     }
 
-    pub async fn apply_down(&self, path: &Path, id: &str, timeout: Option<u64>, remote: bool, yes: bool, dry_run: bool) -> Result<()> {
+    pub async fn apply_down(&self, path: &Path, id: &str, timeout: Option<u64>, remote: bool, yes: bool, dry_run: bool, unlock: bool) -> Result<()> {
         let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
         let target_id = util::normalize_migration_id(id);
         let down_sql = if remote {
             self.repo.fetch_down_sql(&target_id).await?.unwrap_or_default()
         } else {
-            let p = migration_dir.join(&target_id).join("down.sql");
-            std::fs::read_to_string(&p)?
+            let (_up_sql, down_sql) = util::read_migration_files(migration_dir, &target_id)?;
+            down_sql
         };
 
         let diff_fn = || -> Result<()> { util::display_sql_migration(&target_id, &down_sql, "DOWN") };
@@ -64,7 +63,7 @@ impl<R: MigrationRepository> MigrationService<R> {
             return Ok(())
         }
 
-        self.repo.revert_migration(&target_id, &down_sql, timeout, dry_run).await?;
+        self.repo.revert_migration(&target_id, &down_sql, timeout, dry_run, unlock).await?;
         util::print_migration_results(1, "reverted");
         Ok(())
     }
@@ -78,38 +77,8 @@ impl<R: MigrationRepository> MigrationService<R> {
                     println!("No migrations found.");
                     return Ok(())
                 }
-                let mut all: BTreeMap<String, (Option<chrono::NaiveDateTime>, bool)> = BTreeMap::new();
-                for id in &local {
-                    let entry = all.entry(id.clone()).or_default();
-                    entry.1 = true;
-                }
-                for (id, ts) in &history {
-                    let entry = all.entry(id.clone()).or_default();
-                    entry.0 = Some(*ts);
-                }
-                let mut table = Table::new();
-                table
-                    .load_preset(UTF8_FULL)
-                    .apply_modifier(UTF8_ROUND_CORNERS)
-                    .set_content_arrangement(ContentArrangement::Dynamic)
-                    .set_header(vec![
-                        Cell::new("Migration ID"),
-                        Cell::new("Remote"),
-                        Cell::new("Local"),
-                    ]);
-                for (id, (applied_at, is_local)) in all {
-                    let remote_str = if let Some(ts) = applied_at {
-                        let utc_dt = chrono::Local.from_utc_datetime(&ts);
-                        utc_dt.format("%Y-%m-%d %H:%M:%S %Z").to_string()
-                    } else { "❌".to_string() };
-                    let local_str = if is_local { "✅" } else { "❌" };
-                    table.add_row(vec![
-                        Cell::new(id),
-                        Cell::new(remote_str).set_alignment(CellAlignment::Center),
-                        Cell::new(local_str).set_alignment(CellAlignment::Center),
-                    ]);
-                }
-                println!("{table}");
+                let migration_dir = self.repo.get_path().parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", self.repo.get_path().display()))?;
+                util::render_migration_table(&local, &history, migration_dir)?;
                 Ok(())
             }
             OutputFormat::Json => {
@@ -118,22 +87,37 @@ impl<R: MigrationRepository> MigrationService<R> {
                     id: String,
                     remote: Option<DateTime<Utc>>,
                     local: bool,
+                    comment: Option<String>,
+                    locked: bool,
                 }
-                let mut all: BTreeMap<String, (Option<chrono::NaiveDateTime>, bool)> = BTreeMap::new();
+                let mut all: BTreeMap<String, (Option<chrono::NaiveDateTime>, bool, Option<String>, bool)> = BTreeMap::new();
+                let migration_dir = self.repo.get_path().parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", self.repo.get_path().display()))?;
+                
                 for id in &local {
                     let entry = all.entry(id.clone()).or_default();
                     entry.1 = true;
+                    // Get locked status from local meta.toml
+                    if let Ok(meta) = util::read_migration_meta(migration_dir, id) {
+                        entry.3 = meta.is_locked();
+                    }
                 }
-                for (id, ts) in &history {
+                for (id, ts, comment, locked) in &history {
                     let entry = all.entry(id.clone()).or_default();
                     entry.0 = Some(*ts);
+                    entry.2 = comment.clone();
+                    // Use remote locked status if migration is applied
+                    if entry.0.is_some() {
+                        entry.3 = *locked;
+                    }
                 }
                 let mut rows: Vec<RowOut> = Vec::new();
-                for (id, (applied_at, is_local)) in all {
+                for (id, (applied_at, is_local, comment, locked)) in all {
                     rows.push(RowOut { 
                         id, 
                         remote: applied_at.map(|naive| Utc.from_utc_datetime(&naive)), 
-                        local: is_local 
+                        local: is_local,
+                        comment,
+                        locked,
                     });
                 }
                 println!("{}", serde_json::to_string_pretty(&rows)?);
@@ -185,8 +169,8 @@ impl<R: MigrationRepository> MigrationService<R> {
         let mut previous: Option<String> = self.repo.fetch_last_id().await?;
         let mut applied_count = 0usize;
         for id in to_apply {
-            let (up_sql, down_sql) = util::read_migration_files(migration_dir, &id)?;
-            self.repo.apply_migration(&id, &up_sql, &down_sql, previous.as_deref(), timeout, dry_run).await?;
+            let (up_sql, down_sql, meta) = util::read_migration_with_meta(migration_dir, &id)?;
+            self.repo.apply_migration(&id, &up_sql, &down_sql, meta.comment.as_deref(), previous.as_deref(), timeout, dry_run, meta.is_locked()).await?;
             previous = Some(id.clone());
             applied_count += 1;
         }
@@ -195,7 +179,7 @@ impl<R: MigrationRepository> MigrationService<R> {
         Ok(())
     }
 
-    pub async fn down(&self, path: &Path, timeout: Option<u64>, count: Option<usize>, remote: bool, yes: bool, dry_run: bool) -> Result<()> {
+    pub async fn down(&self, path: &Path, timeout: Option<u64>, count: usize, remote: bool, yes: bool, dry_run: bool, unlock: bool) -> Result<()> {
         let applied = self.repo.fetch_applied_ids().await?;
         if applied.is_empty() {
             println!("No migrations applied.");
@@ -204,8 +188,7 @@ impl<R: MigrationRepository> MigrationService<R> {
         let mut applied_sorted: Vec<String> = applied.into_iter().collect();
         applied_sorted.sort();
         applied_sorted.reverse();
-        let take_n = count.unwrap_or(1);
-        let targets: Vec<String> = applied_sorted.into_iter().take(take_n).collect();
+        let targets: Vec<String> = applied_sorted.into_iter().take(count).collect();
 
         if targets.is_empty() { println!("Nothing to revert."); return Ok(()) }
 
@@ -217,8 +200,8 @@ impl<R: MigrationRepository> MigrationService<R> {
                     let down_sql = if remote {
                         String::from("-- remote down sql omitted in preview")
                     } else {
-                        let p = migration_dir.join(id).join("down.sql");
-                        std::fs::read_to_string(&p)?
+                        let (_up_sql, down_sql) = util::read_migration_files(migration_dir, id)?;
+                        down_sql
                     };
                     util::display_sql_migration(id, &down_sql, "DOWN")?;
                 }
@@ -235,10 +218,10 @@ impl<R: MigrationRepository> MigrationService<R> {
             let down_sql = if remote {
                 self.repo.fetch_down_sql(&id).await?.unwrap_or_default()
             } else {
-                let p = migration_dir.join(&id).join("down.sql");
-                std::fs::read_to_string(&p)?
+                let (_up_sql, down_sql) = util::read_migration_files(migration_dir, &id)?;
+                down_sql
             };
-            self.repo.revert_migration(&id, &down_sql, timeout, dry_run).await?;
+                            self.repo.revert_migration(&id, &down_sql, timeout, dry_run, unlock).await?;
             reverted += 1;
         }
 
@@ -246,5 +229,3 @@ impl<R: MigrationRepository> MigrationService<R> {
         Ok(())
     }
 }
-
-
