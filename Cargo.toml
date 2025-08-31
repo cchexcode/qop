@@ -12,7 +12,7 @@ categories = ["command-line-utilities", "database"]
 readme = "docs/README.md"
 
 [features]
-default = ["sub+sqlite", "sub+postgres"]
+default = ["sub+sqlite"]
 "sub+postgres" = ["sqlx/postgres"]
 "sub+sqlite" = ["sqlx/sqlite"]
 
