@@ -258,10 +258,10 @@ qop subsystem postgres history fix --path path/to/your/qop.toml
 Shows the raw SQL content of pending migrations without applying them.
 
 ```bash
-qop --experimental subsystem postgres diff --path path/to/your/qop.toml
+qop subsystem postgres diff --path path/to/your/qop.toml
 ```
 
-This command outputs the exact SQL content that would be executed for each pending migration, with no additional formatting or headers.
+This command outputs the exact SQL content for each pending migration using the same formatted preview as the interactive diff (with headers and separators).
 
 ##### `qop subsystem postgres apply`
 
@@ -387,10 +387,10 @@ qop subsystem sqlite history fix --path path/to/your/qop.toml
 Shows the raw SQL content of pending migrations without applying them.
 
 ```bash
-qop --experimental subsystem sqlite diff --path path/to/your/qop.toml
+qop subsystem sqlite diff --path path/to/your/qop.toml
 ```
 
-This command outputs the exact SQL content that would be executed for each pending migration, with no additional formatting or headers.
+This command outputs the exact SQL content for each pending migration using the same formatted preview as the interactive diff (with headers and separators).
 
 ##### `qop subsystem sqlite apply up`
 
@@ -467,13 +467,13 @@ qop subsystem postgres down -p migrations/qop.toml
 
 The preview shows the raw SQL content exactly as it will be executed, with no additional formatting.
 
-### Experimental: Diff command
+### Diff command
 
-You can also print pending SQL without prompts using the diff command (experimental; requires `--experimental`):
+You can also print pending SQL without prompts using the diff command:
 
 ```bash
-qop --experimental subsystem postgres diff -p migrations/qop.toml
-qop --experimental subsystem sqlite   diff -p migrations/qop.toml
+qop subsystem postgres diff -p migrations/qop.toml
+qop subsystem sqlite   diff -p migrations/qop.toml
 ```
 
 **Example Output:**
@@ -507,7 +507,7 @@ The `--dry` flag is now available for all migration commands and executes migrat
 **Development Workflow:**
 ```bash
 # 1. Check what migrations are pending
-qop --experimental subsystem postgres diff
+qop subsystem postgres diff
 
 # 2. Apply with confirmation
 qop subsystem postgres up
@@ -522,7 +522,7 @@ qop subsystem postgres up --yes
 **Debugging:**
 ```bash
 # Save pending SQL to a file for review
-qop --experimental subsystem postgres diff > pending_migrations.sql
+qop subsystem postgres diff > pending_migrations.sql
 
 # Apply a specific migration
 qop subsystem postgres apply up 123456789

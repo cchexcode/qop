@@ -960,8 +960,8 @@ pub async fn diff(path: &Path, migrations_table: &str, pool: &Pool<Sqlite>) -> R
             let (up_sql, _down_sql) = crate::core::migration::read_migration_files(
                 migration_dir, migration_id
             )?;
-
-            print!("{}", up_sql);
+            // Render with same formatting as interactive 'd'
+            crate::core::migration::display_sql_migration(migration_id, &up_sql, "UP")?;
         }
     }
 

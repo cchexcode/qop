@@ -25,22 +25,6 @@ pub(crate) struct CallArgs {
 
 impl CallArgs {
     pub(crate) fn validate(&self) -> Result<()> {
-        if self.privileges == Privilege::Experimental {
-            return Ok(());
-        }
-
-        match &self.command {
-            #[cfg(feature = "sub+postgres")]
-            | Command::Subsystem(Subsystem::Postgres { command: crate::subsystem::postgres::commands::Command::Up { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
-            #[cfg(feature = "sub+postgres")]
-            | Command::Subsystem(Subsystem::Postgres { command: crate::subsystem::postgres::commands::Command::Down { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
-            #[cfg(feature = "sub+sqlite")]
-            | Command::Subsystem(Subsystem::Sqlite { command: crate::subsystem::sqlite::commands::Command::Up { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
-            #[cfg(feature = "sub+sqlite")]
-            | Command::Subsystem(Subsystem::Sqlite { command: crate::subsystem::sqlite::commands::Command::Down { diff: true, .. }, .. }) => anyhow::bail!("diff is experimental"),
-            | _ => (),
-        }
-
         Ok(())
     }
 }

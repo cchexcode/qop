@@ -1093,12 +1093,11 @@ pub async fn diff(path: &Path, schema: &str, migrations_table: &str, pool: &Pool
         for migration_id in &migrations_to_apply {
             let migration_path = migration_dir.join(migration_id);
             let up_sql_path = migration_path.join("up.sql");
-            
             let up_sql = std::fs::read_to_string(&up_sql_path).with_context(
                 || format!("Failed to read up migration: {}", up_sql_path.display()),
             )?;
-            
-            print!("{}", up_sql);
+            // Render with same formatting as interactive 'd'
+            crate::core::migration::display_sql_migration(migration_id, &up_sql, "UP")?;
         }
     }
 
