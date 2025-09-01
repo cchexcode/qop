@@ -13,6 +13,10 @@ This release introduces several major changes to the qop migration system:
 
 These changes require manual database schema updates to upgrade from version 0.4.x.
 
+## Config
+
+The config version field now follows the `cargo` semver spec instead of the `pep` semver spec. Notable differences are `0.0.0-alpha.1` instead of `0.0.0-a1` as an example. Make sure to update accordingly.
+
 ## Database Schema Upgrade Instructions
 
 ### Subsystem: Postgres
