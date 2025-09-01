@@ -83,13 +83,10 @@ fn create_bulk_reverts_diff_fn<'a>(
             let down_sql: String = if remote {
                 row.get("down")
             } else {
-                let down_sql_path = migration_dir.join(&id).join("down.sql");
-                std::fs::read_to_string(&down_sql_path).with_context(|| {
-                    format!(
-                        "Failed to read down migration: {}",
-                        down_sql_path.display()
-                    )
-                })?
+                let (_up_sql, down_sql) = crate::core::migration::read_migration_files(
+                    migration_dir, &id
+                )?;
+                down_sql
             };
             
             display_sql_migration(&id, &down_sql, "DOWN");
@@ -528,13 +525,10 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
             let down_sql: String = if remote {
                 row.get("down")
             } else {
-                let down_sql_path = migration_dir.join(&id).join("down.sql");
-                std::fs::read_to_string(&down_sql_path).with_context(|| {
-                    format!(
-                        "Failed to read down migration: {}",
-                        down_sql_path.display()
-                    )
-                })?
+                let (_up_sql, down_sql) = crate::core::migration::read_migration_files(
+                    migration_dir, &id
+                )?;
+                down_sql
             };
             println!("Reverting migration: {}", id);
 
@@ -797,14 +791,11 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
         tx.commit().await?;
         sql
     } else {
-        // Get from local file
-        let down_sql_path = migration_dir.join(&target_migration_id).join("down.sql");
-        std::fs::read_to_string(&down_sql_path).with_context(|| {
-            format!(
-                "Failed to read down migration: {}",
-                down_sql_path.display()
-            )
-        })?
+        // Get from local file via helper to ensure `id=` directory convention
+        let (_up_sql, down_sql) = crate::core::migration::read_migration_files(
+            migration_dir, &target_migration_id
+        )?;
+        down_sql
     };
 
     // Confirm migration revert

@@ -19,6 +19,10 @@ The config version field now follows the `cargo` semver spec instead of the `pep
 
 ## Database Schema Upgrade Instructions
 
+### IDs
+
+All IDs in the migrations table had their `id=` prefix stripped.
+
 ### Subsystem: Postgres
 
 ```postgresql
@@ -37,6 +41,9 @@ CREATE TABLE "__qop_log" (
     sql_command TEXT NOT NULL,
     executed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+UPDATE __qop_migrations SET id = REPLACE(id, 'id=', '');
+UPDATE __qop_migrations SET pre = REPLACE(pre, 'id=', '');
 ```
 
 ### Subsystem: sqlite
@@ -57,6 +64,9 @@ CREATE TABLE "__qop_log" (
     sql_command TEXT NOT NULL,
     executed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+UPDATE __qop_migrations SET id = REPLACE(id, 'id=', '');
+UPDATE __qop_migrations SET pre = REPLACE(pre, 'id=', '');
 ```
 
 ## New Features in v0.5

@@ -63,19 +63,10 @@ fn create_bulk_migrations_diff_fn<'a>(
 ) -> impl Fn() -> Result<()> + 'a {
     move || -> Result<()> {
         for migration_id in migrations {
-            let sql = if direction == "UP" {
-                let migration_path = migration_dir.join(migration_id);
-                let up_sql_path = migration_path.join("up.sql");
-                std::fs::read_to_string(&up_sql_path).with_context(
-                    || format!("Failed to read up migration: {}", up_sql_path.display()),
-                )?
-            } else {
-                let migration_path = migration_dir.join(migration_id);
-                let down_sql_path = migration_path.join("down.sql");
-                std::fs::read_to_string(&down_sql_path).with_context(
-                    || format!("Failed to read down migration: {}", down_sql_path.display()),
-                )?
-            };
+            let (up_sql, down_sql) = crate::core::migration::read_migration_files(
+                migration_dir, migration_id
+            )?;
+            let sql = if direction == "UP" { up_sql } else { down_sql };
             
             display_migration_diff_from_sql(migration_id, &sql, direction)?;
         }
@@ -94,13 +85,10 @@ fn create_bulk_reverts_diff_fn<'a>(
             let down_sql: String = if remote {
                 row.get("down")
             } else {
-                let down_sql_path = migration_dir.join(&id).join("down.sql");
-                std::fs::read_to_string(&down_sql_path).with_context(|| {
-                    format!(
-                        "Failed to read down migration: {}",
-                        down_sql_path.display()
-                    )
-                })?
+                let (_up_sql, down_sql) = crate::core::migration::read_migration_files(
+                    migration_dir, &id
+                )?;
+                down_sql
             };
             
             display_migration_diff_from_sql(&id, &down_sql, "DOWN")?;
@@ -445,13 +433,9 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
         // Show diff preview if --diff flag is specified
         if diff {
             for migration_id in &migrations_to_apply {
-                let migration_path = migration_dir.join(migration_id);
-                let up_sql_path = migration_path.join("up.sql");
-                
-                let up_sql = std::fs::read_to_string(&up_sql_path).with_context(
-                    || format!("Failed to read up migration: {}", up_sql_path.display()),
+                let (up_sql, _down_sql) = crate::core::migration::read_migration_files(
+                    migration_dir, migration_id
                 )?;
-                
                 print!("{}", up_sql);
             }
             
@@ -494,7 +478,6 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
         
         // Apply each migration in its own transaction
         for migration_id in &migrations_to_apply {
-            let migration_path = migration_dir.join(migration_id);
             if dry {
                 println!("⏳ Testing migration: {}", migration_id);
             } else {
@@ -502,19 +485,8 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
             }
             let id = migration_id.as_str();
 
-            let up_sql_path = migration_path.join("up.sql");
-            let down_sql_path = migration_path.join("down.sql");
-
-            let up_sql = std::fs::read_to_string(&up_sql_path).with_context(
-                || format!("Failed to read up migration: {}", up_sql_path.display()),
-            )?;
-            let down_sql = std::fs::read_to_string(&down_sql_path).with_context(
-                || {
-                    format!(
-                        "Failed to read down migration: {}",
-                        down_sql_path.display()
-                    )
-                },
+            let (up_sql, down_sql) = crate::core::migration::read_migration_files(
+                migration_dir, migration_id
             )?;
 
             // Start a new transaction for this migration
@@ -649,13 +621,10 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
             let down_sql: String = if remote {
                 row.get("down")
             } else {
-                let down_sql_path = migration_dir.join(&id).join("down.sql");
-                std::fs::read_to_string(&down_sql_path).with_context(|| {
-                    format!(
-                        "Failed to read down migration: {}",
-                        down_sql_path.display()
-                    )
-                })?
+                let (_up_sql, down_sql) = crate::core::migration::read_migration_files(
+                    migration_dir, &id
+                )?;
+                down_sql
             };
             println!("Reverting migration: {}", id);
 
@@ -767,13 +736,9 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
         }
     }
 
-    // Apply the migration
-    let migration_path = migration_dir.join(&target_migration_id);
-    let up_sql_path = migration_path.join("up.sql");
-    let down_sql_path = migration_path.join("down.sql");
-
-    let up_sql = std::fs::read_to_string(&up_sql_path).with_context(
-        || format!("Failed to read up migration: {}", up_sql_path.display()),
+    // Apply the migration (read via helper to ensure `id=` directory convention)
+    let (up_sql, down_sql) = crate::core::migration::read_migration_files(
+        migration_dir, &target_migration_id
     )?;
     // Confirm migration application
     let diff_fn = create_single_migration_diff_fn(&target_migration_id, &up_sql, "UP");
@@ -783,18 +748,7 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
         return Ok(());
     }
 
-    // Continue with reading migration files
-    let up_sql = std::fs::read_to_string(&up_sql_path).with_context(
-        || format!("Failed to read up migration: {}", up_sql_path.display()),
-    )?;
-    let down_sql = std::fs::read_to_string(&down_sql_path).with_context(
-        || {
-            format!(
-                "Failed to read down migration: {}",
-                down_sql_path.display()
-            )
-        },
-    )?;
+    // Both up and down SQL already read above
 
     // Get the latest migration for the pre field
     let mut tx = pool.begin().await?;
@@ -1090,10 +1044,8 @@ pub async fn diff(path: &Path, schema: &str, migrations_table: &str, pool: &Pool
         println!("All migrations are up to date.");
     } else {
         for migration_id in &migrations_to_apply {
-            let migration_path = migration_dir.join(migration_id);
-            let up_sql_path = migration_path.join("up.sql");
-            let up_sql = std::fs::read_to_string(&up_sql_path).with_context(
-                || format!("Failed to read up migration: {}", up_sql_path.display()),
+            let (up_sql, _down_sql) = crate::core::migration::read_migration_files(
+                migration_dir, migration_id
             )?;
             // Render with same formatting as interactive 'd'
             crate::core::migration::display_sql_migration(migration_id, &up_sql, "UP")?;
