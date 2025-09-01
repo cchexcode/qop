@@ -72,16 +72,16 @@ pub(crate) async fn dispatch(subsystem: crate::args::Subsystem) -> anyhow::Resul
                 crate::subsystem::postgres::commands::Command::History(history_cmd) => match history_cmd {
                     crate::subsystem::postgres::commands::HistoryCommand::Fix => {
                         let repo = super::postgres::repo::PostgresRepo::from_config(&path, config.clone(), true).await?;
-                        super::postgres::migration::history_fix(&path, &repo.config.schema, &repo.config.migrations_table(), &repo.pool).await
+                        super::postgres::migration::history_fix(&path, &repo.config.schema, &repo.config.tables.migrations, &repo.pool).await
                     }
                     crate::subsystem::postgres::commands::HistoryCommand::Sync => {
                         let repo = super::postgres::repo::PostgresRepo::from_config(&path, config.clone(), true).await?;
-                        super::postgres::migration::history_sync(&path, &repo.config.schema, &repo.config.migrations_table(), &repo.pool).await
+                        super::postgres::migration::history_sync(&path, &repo.config.schema, &repo.config.tables.migrations, &repo.pool).await
                     }
                 },
                 crate::subsystem::postgres::commands::Command::Diff => {
                     let repo = super::postgres::repo::PostgresRepo::from_config(&path, config.clone(), true).await?;
-                    super::postgres::migration::diff(&path, &repo.config.schema, &repo.config.migrations_table(), &repo.pool).await
+                    super::postgres::migration::diff(&path, &repo.config.schema, &repo.config.tables.migrations, &repo.pool).await
                 },
             }
         }
@@ -151,16 +151,16 @@ pub(crate) async fn dispatch(subsystem: crate::args::Subsystem) -> anyhow::Resul
                 crate::subsystem::sqlite::commands::Command::History(history_cmd) => match history_cmd {
                     crate::subsystem::sqlite::commands::HistoryCommand::Fix => {
                         let repo = super::sqlite::repo::SqliteRepo::from_config(&path, config.clone(), true).await?;
-                        super::sqlite::migration::history_fix(&path, &repo.config.migrations_table(), &repo.pool).await
+                        super::sqlite::migration::history_fix(&path, &repo.config.tables.migrations, &repo.pool).await
                     }
                     crate::subsystem::sqlite::commands::HistoryCommand::Sync => {
                         let repo = super::sqlite::repo::SqliteRepo::from_config(&path, config.clone(), true).await?;
-                        super::sqlite::migration::history_sync(&path, &repo.config.migrations_table(), &repo.pool).await
+                        super::sqlite::migration::history_sync(&path, &repo.config.tables.migrations, &repo.pool).await
                     }
                 },
                 crate::subsystem::sqlite::commands::Command::Diff => {
                     let repo = super::sqlite::repo::SqliteRepo::from_config(&path, config.clone(), true).await?;
-                    super::sqlite::migration::diff(&path, &repo.config.migrations_table(), &repo.pool).await
+                    super::sqlite::migration::diff(&path, &repo.config.tables.migrations, &repo.pool).await
                 },
             }
         }

@@ -297,7 +297,7 @@ pub(crate) async fn build_pool_from_config(path: &Path, subsystem_config: &Subsy
     let pool = PgPoolOptions::new().max_connections(10).connect(&uri).await?;
     if check_cli_version {
         let mut tx = pool.begin().await?;
-        let last_migration_version = get_table_version(&mut tx, &subsystem_config.migrations_table()).await?;
+        let last_migration_version = get_table_version(&mut tx, &subsystem_config.tables.migrations).await?;
         if let Some(version) = last_migration_version {
             let cli_version = semver::Version::parse(env!("CARGO_PKG_VERSION"))?;
             if !(cli_version.major == 0 && cli_version.minor == 0 && cli_version.patch == 0) {
@@ -370,7 +370,7 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, diff: b
     let local_migrations = get_local_migrations(path)?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let schema = &config.schema;
-    let migrations_table = &config.migrations_table();
+    let migrations_table = &config.tables.migrations;
 
     let mut tx = pool.begin().await?;
 
@@ -544,7 +544,7 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
     let migration_dir = path.parent().ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let effective_timeout = get_effective_timeout(&config, timeout);
     let schema = &config.schema;
-    let migrations_table = &config.migrations_table();
+    let migrations_table = &config.tables.migrations;
     
     let mut tx = pool.begin().await?;
 
@@ -674,7 +674,7 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
         .ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let local_migrations = get_local_migrations(path)?;
     let schema = &config.schema;
-    let migrations_table = &config.migrations_table();
+    let migrations_table = &config.tables.migrations;
 
     // Normalize the migration ID to remove "id=" prefix if present  
     let target_migration_id = normalize_migration_id(&id);
@@ -803,7 +803,7 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
         .parent()
         .ok_or_else(|| anyhow::anyhow!("invalid migration path: {}", path.display()))?;
     let schema = &config.schema;
-    let migrations_table = &config.migrations_table();
+    let migrations_table = &config.tables.migrations;
 
     // Normalize the migration ID to remove "id=" prefix if present  
     let target_migration_id = normalize_migration_id(&id);

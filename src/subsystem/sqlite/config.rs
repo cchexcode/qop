@@ -6,19 +6,14 @@ use crate::config::DataSource;
 pub struct SubsystemSqlite {
     pub connection: DataSource<String>,
     pub timeout: Option<u64>,
-    pub table_prefix: String,
+    pub tables: Tables,
 }
 
-impl SubsystemSqlite {
-    /// Get the migrations table name from the prefix
-    pub fn migrations_table(&self) -> String {
-        format!("{}_migrations", self.table_prefix)
-    }
-    
-    /// Get the log table name from the prefix
-    pub fn log_table(&self) -> String {
-        format!("{}_log", self.table_prefix)
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Tables {
+    pub migrations: String,
+    pub log: String,
 }
 
 impl Default for SubsystemSqlite {
@@ -26,7 +21,10 @@ impl Default for SubsystemSqlite {
         Self {
             connection: DataSource::Static(String::new()),
             timeout: None,
-            table_prefix: "__qop".to_string(),
+            tables: Tables {
+                migrations: "__qop_migrations".to_string(),
+                log: "__qop_log".to_string(),
+            },
         }
     }
 }

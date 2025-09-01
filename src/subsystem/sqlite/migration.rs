@@ -289,12 +289,12 @@ pub(crate) async fn build_pool_from_config(path: &Path, sqlite_config: &Subsyste
     if check_cli_version {
         let mut tx = pool.begin().await?;
         let table_exists = sqlx::query("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
-            .bind(&sqlite_config.migrations_table())
+            .bind(&sqlite_config.tables.migrations)
             .fetch_optional(&mut *tx)
             .await?
             .is_some();
         if table_exists {
-            if let Some(version) = get_table_version(&mut tx, &sqlite_config.migrations_table()).await? {
+            if let Some(version) = get_table_version(&mut tx, &sqlite_config.tables.migrations).await? {
                 let cli_version = semver::Version::parse(env!("CARGO_PKG_VERSION"))?;
                 if !(cli_version.major == 0 && cli_version.minor == 0 && cli_version.patch == 0) {
                     let last_migration_version = semver::Version::parse(&version)?;
@@ -379,8 +379,8 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: 
 
     set_timeout_if_needed(&mut *tx, effective_timeout).await?;
 
-    let applied_migrations = get_applied_migrations(&mut tx, &config.migrations_table()).await?;
-    let mut last_migration_id = get_last_migration_id(&mut tx, &config.migrations_table()).await?;
+    let applied_migrations = get_applied_migrations(&mut tx, &config.tables.migrations).await?;
+    let mut last_migration_id = get_last_migration_id(&mut tx, &config.tables.migrations).await?;
 
     // Commit the initial query transaction
     tx.commit().await?;
@@ -446,7 +446,7 @@ pub async fn up(path: &Path, timeout: Option<u64>, count: Option<usize>, _diff: 
             // Record the migration in the tracking table
             insert_migration_record(
                 &mut *migration_tx,
-                &config.migrations_table(),
+                &config.tables.migrations,
                 id,
                 &up_sql,
                 &down_sql,
@@ -491,7 +491,7 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
 
     set_timeout_if_needed(&mut *tx, effective_timeout).await?;
 
-    let last_migrations = get_recent_migrations_for_revert(&mut tx, &config.migrations_table()).await?;
+    let last_migrations = get_recent_migrations_for_revert(&mut tx, &config.tables.migrations).await?;
 
     let migrations_to_revert: Vec<SqliteRow> = if let Some(count) = count {
         last_migrations.into_iter().take(count).collect()
@@ -542,7 +542,7 @@ pub async fn down(path: &Path, timeout: Option<u64>, count: Option<usize>, remot
             execute_sql_statements(&mut revert_tx, &down_sql, &id).await?;
 
             // Remove the migration from the tracking table
-            delete_migration_record(&mut *revert_tx, &config.migrations_table(), &id).await?;
+            delete_migration_record(&mut *revert_tx, &config.tables.migrations, &id).await?;
 
             // Commit or rollback based on dry-run mode
             if dry {
@@ -608,7 +608,7 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
     let mut tx = pool.begin().await?;
 
     // Get current applied migrations
-    let applied_migrations = get_applied_migrations(&mut tx, &config.migrations_table()).await?;
+    let applied_migrations = get_applied_migrations(&mut tx, &config.tables.migrations).await?;
 
     tx.commit().await?;
 
@@ -678,7 +678,7 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
 
     // Get the latest migration for the pre field
     let mut tx = pool.begin().await?;
-    let last_migration_id = get_last_migration_id(&mut tx, &config.migrations_table()).await?;
+    let last_migration_id = get_last_migration_id(&mut tx, &config.tables.migrations).await?;
     tx.commit().await?;
 
     // Execute the migration
@@ -696,7 +696,7 @@ pub async fn apply_up(path: &Path, id: &str, timeout: Option<u64>, dry: bool, ye
 
     insert_migration_record(
         &mut *migration_tx,
-        &config.migrations_table(),
+        &config.tables.migrations,
         &target_migration_id,
         &up_sql,
         &down_sql,
@@ -735,7 +735,7 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
     let mut tx = pool.begin().await?;
 
     // Get current applied migrations
-    let applied_migrations = get_applied_migrations(&mut tx, &config.migrations_table()).await?;
+    let applied_migrations = get_applied_migrations(&mut tx, &config.tables.migrations).await?;
 
     tx.commit().await?;
 
@@ -787,7 +787,7 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
     let down_sql: String = if remote {
         // Get from database
         let mut tx = pool.begin().await?;
-        let sql = get_migration_down_sql(&mut tx, &config.migrations_table(), &target_migration_id).await?;
+        let sql = get_migration_down_sql(&mut tx, &config.tables.migrations, &target_migration_id).await?;
         tx.commit().await?;
         sql
     } else {
@@ -819,7 +819,7 @@ pub async fn apply_down(path: &Path, id: &str, timeout: Option<u64>, remote: boo
     
     execute_sql_statements(&mut revert_tx, &down_sql, &target_migration_id).await?;
 
-    delete_migration_record(&mut *revert_tx, &config.migrations_table(), &target_migration_id).await?;
+    delete_migration_record(&mut *revert_tx, &config.tables.migrations, &target_migration_id).await?;
 
     if dry {
         revert_tx.rollback().await?;

@@ -2,7 +2,10 @@ version = "0.0.0"
 
 [subsystem.sqlite]
 timeout = 60
-table_prefix = "__qop"
+
+[subsystem.sqlite.tables]
+migrations = "__qop_migrations"
+log = "__qop_log"
 
 [subsystem.sqlite.connection]
 static = "test.db"
