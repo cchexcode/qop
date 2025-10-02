@@ -16,6 +16,8 @@
 ## Installation
 
 ```bash
+cargo install qop
+# or
 cargo install --path .
 ```
 
