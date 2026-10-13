@@ -1,5 +1,14 @@
 [build]
 rustflags = ["-C", "target-feature=+crt-static"]
 
+# Zig's bundled glibc is dynamic-only when cross-compiling. The global
+# +crt-static flag makes rustc pass -static, which zig 0.15 rejects for
+# aarch64-unknown-linux-gnu ("libc of the specified target requires dynamic
+# linking"). x86_64-unknown-linux-gnu ignores -static and still emits a
+# dynamic binary. These flags replace [build].rustflags for matching targets.
+# Musl keeps the static CRT from the global flag (and from the target default).
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))']
+rustflags = ["-C", "target-feature=-crt-static"]
+
 [registries.crates-io]
 protocol = "sparse"
