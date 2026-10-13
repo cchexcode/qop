@@ -121,47 +121,61 @@ Notes:
 ### PostgreSQL Configuration
 
 ```toml
-version = ">=0.1.0"
+version = ">=0.0.0"
 
 [subsystem.postgres]
 connection = { static = "postgresql://postgres:password@localhost:5432/postgres" }
 schema = "public"
-table_prefix = "__qop"
 timeout = 30
+
+[subsystem.postgres.tables]
+migrations = "__qop_migrations"
+log = "__qop_log"
 ```
 
 You can also use environment variables for the connection string:
 
 ```toml
-version = ">=0.1.0"
+version = ">=0.0.0"
 
 [subsystem.postgres]
 connection = { from_env = "DATABASE_URL" }
 schema = "public"
-table_prefix = "__qop"
 timeout = 30
+
+[subsystem.postgres.tables]
+migrations = "__qop_migrations"
+log = "__qop_log"
 ```
 
 ### SQLite Configuration
 
 ```toml
-version = ">=0.1.0"
+version = ">=0.0.0"
 
 [subsystem.sqlite]
-connection = { static = "sqlite:///path/to/database.db" }
-table_prefix = "__qop"
+connection = { static = "./app.db" }
 timeout = 30
+
+[subsystem.sqlite.tables]
+migrations = "__qop_migrations"
+log = "__qop_log"
 ```
+
+A relative path is resolved from the directory that contains `qop.toml`, not from the process working directory. `sqlite:` URLs and absolute paths are used as written.
 
 Or with environment variables:
 
 ```toml
-version = ">=0.1.0"
+version = ">=0.0.0"
 
 [subsystem.sqlite]
 connection = { from_env = "DATABASE_URL" }
-table_prefix = "__qop"
 timeout = 30
+
+[subsystem.sqlite.tables]
+migrations = "__qop_migrations"
+log = "__qop_log"
 ```
 
 ### SurrealDB Configuration
@@ -169,7 +183,7 @@ timeout = 30
 SurrealDB support is optional. Build with `sub+surrealdb`, then configure the HTTP endpoint, namespace, and database:
 
 ```toml
-version = ">=0.1.0"
+version = ">=0.0.0"
 
 [subsystem.surrealdb]
 connection = { static = "http://127.0.0.1:8000" }
@@ -187,7 +201,7 @@ log = "__qop_log"
 You can also load the endpoint and credentials from environment variables:
 
 ```toml
-version = ">=0.1.0"
+version = ">=0.0.0"
 
 [subsystem.surrealdb]
 connection = { from_env = "SURREALDB_URL" }
@@ -203,6 +217,16 @@ log = "__qop_log"
 ```
 
 The migration files live in the same directory as the `qop.toml` file (e.g., `migrations/`). Each migration is a folder named `id=<timestamp>/` containing backend-specific up/down files plus `meta.toml`. SQL backends use `up.sql` and `down.sql`; SurrealDB uses `up.surql` and `down.surql`.
+
+## Exit codes
+
+- `0`: the command finished, including "nothing to do"
+- `1`: the command failed
+- `2`: usage error
+- `3`: a safety check blocked the command (declined confirmation, locked migration without `--unlock`)
+- `4`: a prompt was required, but stdin is not a terminal and `--yes` was not passed
+
+Progress, warnings, and prompts go to stderr. JSON goes to stdout only. `config init` refuses to overwrite an existing file unless `--force` is passed.
 
 ## Usage
 

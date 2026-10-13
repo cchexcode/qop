@@ -1,39 +1,45 @@
-pub mod args;
-pub mod config;
-pub mod core;
-pub mod reference;
-pub mod subsystem;
+mod args;
+mod config;
+mod core;
+mod reference;
+mod subsystem;
 
-use {
-    anyhow::{Context, Result},
-    args::ManualFormat,
+use anyhow::{
+    Context,
+    Result,
 };
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let cmd = crate::args::ClapArgumentLoader::load()?;
+async fn main() {
+    let code = match run().await {
+        | Ok(()) => 0,
+        | Err(err) => {
+            let code = crate::core::outcome::exit_code(&err);
+            eprintln!("Error: {err:#}");
+            code
+        },
+    };
+    std::process::exit(code);
+}
 
+async fn run() -> Result<()> {
+    let cmd = args::ClapArgumentLoader::load()?;
     match cmd.command {
-        | crate::args::Command::Manual { path, format } => {
+        | args::Command::Manual { path, format } => {
             std::fs::create_dir_all(&path)
                 .with_context(|| format!("Failed to create directory: {}", path.display()))?;
             match format {
-                | ManualFormat::Manpages => {
-                    reference::build_manpages(&path)?;
-                },
-                | ManualFormat::Markdown => {
-                    reference::build_markdown(&path)?;
-                },
+                | args::ManualFormat::Manpages => reference::build_manpages(&path)?,
+                | args::ManualFormat::Markdown => reference::build_markdown(&path)?,
             }
             Ok(())
         },
-        | crate::args::Command::Autocomplete { path, shell } => {
+        | args::Command::Autocomplete { path, shell } => {
             std::fs::create_dir_all(&path)
                 .with_context(|| format!("Failed to create directory: {}", path.display()))?;
             reference::build_shell_completion(&path, &shell)?;
             Ok(())
         },
-        | crate::args::Command::Subsystem(subsystem) => crate::subsystem::driver::dispatch(subsystem).await,
-        // If command parsing evolves to allow no subcommand, we could default to interactive here
+        | args::Command::Subsystem(subsystem) => subsystem::driver::dispatch(*subsystem).await,
     }
 }

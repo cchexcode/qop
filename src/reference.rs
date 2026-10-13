@@ -3,7 +3,11 @@ use {
     anyhow::Result,
     clap_complete::Shell,
     clap_mangen::Man,
-    std::{fs::File, io::Write, path::Path},
+    std::{
+        fs::File,
+        io::Write,
+        path::Path,
+    },
 };
 
 fn collect_commands() -> Vec<(String, clap::Command)> {
@@ -21,23 +25,33 @@ fn collect_commands() -> Vec<(String, clap::Command)> {
 
 pub fn build_shell_completion(outdir: &Path, shell: &Shell) -> Result<()> {
     let mut app = ClapArgumentLoader::root_command();
-    clap_complete::generate_to(*shell, &mut app, "qop", &outdir)?;
+    clap_complete::generate_to(*shell, &mut app, "qop", outdir)?;
 
     Ok(())
 }
 
 pub fn build_markdown(outdir: &Path) -> Result<()> {
     for cmd in collect_commands() {
-        let file = Path::new(&outdir).join(&format!("{}.md", cmd.0.strip_prefix("-").unwrap()));
+        let file = Path::new(&outdir).join(format!(
+            "{}.md",
+            cmd.0
+                .strip_prefix('-')
+                .ok_or_else(|| anyhow::anyhow!("command path '{}' is missing the expected prefix", cmd.0))?
+        ));
         let mut file = File::create(&file)?;
-        file.write(clap_markdown::help_markdown_command(&cmd.1).as_bytes())?;
+        file.write_all(clap_markdown::help_markdown_command(&cmd.1).as_bytes())?;
     }
     Ok(())
 }
 
 pub fn build_manpages(outdir: &Path) -> Result<()> {
     for cmd in collect_commands() {
-        let file = Path::new(&outdir).join(&format!("{}.1", cmd.0.strip_prefix("-").unwrap()));
+        let file = Path::new(&outdir).join(format!(
+            "{}.1",
+            cmd.0
+                .strip_prefix('-')
+                .ok_or_else(|| anyhow::anyhow!("command path '{}' is missing the expected prefix", cmd.0))?
+        ));
         let mut file = File::create(&file)?;
         Man::new(cmd.1).render(&mut file)?;
     }
